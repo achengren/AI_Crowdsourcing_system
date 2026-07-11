@@ -5,25 +5,19 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import initSqlJs from 'sql.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const genId = () => crypto.randomBytes(16).toString('hex')
-
-const app = express()
-app.use(cors())
-app.use(express.json())
-
 const JWT_SECRET = 'ai-crowdsourcing-secret-key-2024'
-const DB_PATH = path.join(__dirname, 'db.json')
+const DB_PATH = path.join(__dirname, 'data.db')
 const PORT = 3001
 
-function loadDb() {
-  if (!fs.existsSync(DB_PATH)) return { users: [], submissions: [], comments: [], likes: {} }
-  return JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'))
-}
+const genId = () => crypto.randomBytes(16).toString('hex')
 
-function saveDb(db) {
-  fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2))
+let db
+
+function saveDb() {
+  fs.writeFileSync(DB_PATH, Buffer.from(db.export()))
 }
 
 function getWeekRange() {
@@ -32,11 +26,78 @@ function getWeekRange() {
   const monday = new Date(now)
   monday.setDate(now.getDate() - (day === 0 ? 6 : day - 1))
   monday.setHours(0, 0, 0, 0)
-  const sunday = new Date(monday)
-  sunday.setDate(monday.getDate() + 6)
-  sunday.setHours(23, 59, 59, 999)
-  return { monday, sunday }
+  return monday.toISOString()
 }
+
+async function initDb() {
+  const SQL = await initSqlJs()
+
+  if (fs.existsSync(DB_PATH)) {
+    const buffer = fs.readFileSync(DB_PATH)
+    db = new SQL.Database(buffer)
+    return
+  }
+
+  db = new SQL.Database()
+
+  db.run(`
+    CREATE TABLE users (
+      id TEXT PRIMARY KEY,
+      student_id TEXT UNIQUE,
+      name TEXT NOT NULL,
+      role TEXT DEFAULT 'student',
+      created_at TEXT DEFAULT (datetime('now'))
+    )
+  `)
+
+  db.run(`
+    CREATE TABLE submissions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      author TEXT,
+      prompt TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      category TEXT NOT NULL,
+      ai_answer TEXT DEFAULT '',
+      share_link TEXT DEFAULT '',
+      satisfaction INTEGER DEFAULT 0,
+      is_good_case INTEGER DEFAULT 0,
+      note TEXT DEFAULT '',
+      tags TEXT DEFAULT '[]',
+      like_count INTEGER DEFAULT 0,
+      comment_count INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+  `)
+
+  db.run(`
+    CREATE TABLE likes (
+      case_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      PRIMARY KEY (case_id, user_id)
+    )
+  `)
+
+  db.run(`
+    CREATE TABLE comments (
+      id TEXT PRIMARY KEY,
+      case_id TEXT NOT NULL,
+      author TEXT,
+      content TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (case_id) REFERENCES submissions(id)
+    )
+  `)
+
+  saveDb()
+}
+
+// ====== 中间件 ======
+
+const app = express()
+app.use(cors())
+app.use(express.json())
 
 function authMiddleware(req, res, next) {
   if (req.headers.authorization === 'Bearer guest') {
@@ -61,13 +122,20 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(400).json({ message: '学号和密码不能为空' })
   }
 
-  const db = loadDb()
-  let user = db.users.find((u) => u.studentId === studentId)
-
-  if (!user) {
-    user = { id: genId(), studentId, name: `同学${studentId.slice(-3)}`, role: 'student', createdAt: new Date().toISOString() }
-    db.users.push(user)
-    saveDb(db)
+  let user = db.exec('SELECT id, student_id, name, role FROM users WHERE student_id = ?', [studentId])
+  if (user.length && user[0].values.length) {
+    user = {
+      id: user[0].values[0][0],
+      studentId: user[0].values[0][1],
+      name: user[0].values[0][2],
+      role: user[0].values[0][3],
+    }
+  } else {
+    const id = genId()
+    const name = `同学${studentId.slice(-3)}`
+    db.run('INSERT INTO users (id, student_id, name) VALUES (?, ?, ?)', [id, studentId, name])
+    saveDb()
+    user = { id, studentId, name, role: 'student' }
   }
 
   const token = jwt.sign({ id: user.id, studentId: user.studentId, name: user.name, role: user.role }, JWT_SECRET, { expiresIn: '7d' })
@@ -98,116 +166,131 @@ app.post('/api/chat/send', authMiddleware, (req, res) => {
 
 app.post('/api/submissions', authMiddleware, (req, res) => {
   const { prompt, platform, category, aiAnswer, shareLink, satisfaction, isGoodCase, note, tags } = req.body
-
   if (!prompt || !platform || !category) {
     return res.status(400).json({ message: 'Prompt、AI平台和分类为必填项' })
   }
 
-  const db = loadDb()
-
-  // 每日限制检查
+  // 每日限制
   const today = new Date().toISOString().slice(0, 10)
-  const todayCount = db.submissions.filter(
-    (s) => s.userId === req.user.id && s.createdAt.slice(0, 10) === today
-  ).length
+  const todayRow = db.exec(
+    "SELECT COUNT(*) FROM submissions WHERE user_id = ? AND created_at >= ?",
+    [req.user.id, today]
+  )
+  const todayCount = todayRow[0].values[0][0]
   if (todayCount >= 5) {
     return res.status(400).json({ message: '今日提交已达上限（5条），请明天再来' })
   }
 
-  // 每周限制检查
-  const { monday, sunday } = getWeekRange()
-  const weekCount = db.submissions.filter((s) => {
-    if (s.userId !== req.user.id) return false
-    const d = new Date(s.createdAt)
-    return d >= monday && d <= sunday
-  }).length
+  // 每周限制
+  const weekStart = getWeekRange()
+  const weekRow = db.exec(
+    "SELECT COUNT(*) FROM submissions WHERE user_id = ? AND created_at >= ?",
+    [req.user.id, weekStart]
+  )
+  const weekCount = weekRow[0].values[0][0]
   if (weekCount >= 20) {
     return res.status(400).json({ message: '本周提交已达上限（20条）' })
   }
 
-  const submission = {
-    id: genId(),
-    userId: req.user.id,
-    author: req.user.name,
-    prompt,
-    platform,
-    category,
-    aiAnswer: aiAnswer || '',
-    shareLink: shareLink || '',
-    satisfaction: satisfaction || 0,
-    isGoodCase: isGoodCase || false,
-    note: note || '',
-    tags: tags || [],
-    likeCount: 0,
-    commentCount: 0,
-    createdAt: new Date().toISOString(),
-  }
+  const id = genId()
+  const now = new Date().toISOString()
+  db.run(
+    `INSERT INTO submissions (id, user_id, author, prompt, platform, category, ai_answer, share_link, satisfaction, is_good_case, note, tags, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, req.user.id, req.user.name, prompt, platform, category, aiAnswer || '', shareLink || '', satisfaction || 0, isGoodCase ? 1 : 0, note || '', JSON.stringify(tags || []), now]
+  )
+  saveDb()
 
-  db.submissions.unshift(submission)
-  saveDb(db)
-
-  res.json({ code: 0, data: submission })
+  res.json({
+    code: 0,
+    data: { id, userId: req.user.id, author: req.user.name, prompt, platform, category, aiAnswer, shareLink, satisfaction, isGoodCase, note, tags, likeCount: 0, commentCount: 0, createdAt: now },
+  })
 })
 
 // ====== 我的提交 ======
 
 app.get('/api/submissions/my', authMiddleware, (req, res) => {
-  const db = loadDb()
-  const mySubs = db.submissions
-    .filter((s) => s.userId === req.user.id)
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+  const results = db.exec(
+    "SELECT id, prompt, platform, category, ai_answer, satisfaction, is_good_case, tags, like_count, comment_count, created_at FROM submissions WHERE user_id = ? ORDER BY created_at DESC LIMIT 50",
+    [req.user.id]
+  )
+  const list = results[0] ? results[0].values.map(row => ({
+    id: row[0], prompt: row[1], platform: row[2], category: row[3], aiAnswer: row[4], satisfaction: row[5], isGoodCase: !!row[6], tags: JSON.parse(row[7]), likeCount: row[8], commentCount: row[9], createdAt: row[10],
+  })) : []
 
   // 统计
   const today = new Date().toISOString().slice(0, 10)
-  const todayCount = mySubs.filter((s) => s.createdAt.slice(0, 10) === today).length
+  const weekStart = getWeekRange()
 
-  const { monday } = getWeekRange()
-  const weekCount = mySubs.filter((s) => new Date(s.createdAt) >= monday).length
+  const statsRow = db.exec(`
+    SELECT
+      COUNT(*) as total,
+      SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) as today_count,
+      SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) as week_count,
+      SUM(CASE WHEN is_good_case = 1 THEN 1 ELSE 0 END) as good_cases,
+      ROUND(AVG(satisfaction), 1) as avg_satisfaction
+    FROM submissions WHERE user_id = ?
+  `, [today, weekStart, req.user.id])
 
-  const goodCases = mySubs.filter((s) => s.isGoodCase).length
-  const avgSatisfaction = mySubs.length
-    ? Math.round((mySubs.reduce((sum, s) => sum + s.satisfaction, 0) / mySubs.length) * 10) / 10
-    : 0
+  let stats = { total: 0, todayCount: 0, weekCount: 0, goodCases: 0, avgSatisfaction: 0 }
+  if (statsRow[0] && statsRow[0].values.length) {
+    const v = statsRow[0].values[0]
+    stats = { total: v[0], todayCount: v[1], weekCount: v[2], goodCases: v[3], avgSatisfaction: v[4] || 0 }
+  }
 
-  res.json({
-    code: 0,
-    data: {
-      list: mySubs.slice(0, 50),
-      stats: { total: mySubs.length, weekCount, todayCount, goodCases, avgSatisfaction },
-    },
-  })
+  res.json({ code: 0, data: { list, stats } })
 })
 
 // ====== 案例广场 ======
 
 app.get('/api/cases', (req, res) => {
   const { category, keyword, sortBy = 'latest', page = 1, pageSize = 12 } = req.query
-  const db = loadDb()
 
-  let cases = db.submissions.filter((s) => s.isGoodCase || true) // 所有案例可见
+  let where = "WHERE 1=1"
+  const params = []
 
   if (category) {
-    cases = cases.filter((s) => s.category === category)
+    where += " AND category = ?"
+    params.push(category)
   }
   if (keyword) {
-    cases = cases.filter(
-      (s) => s.prompt.includes(keyword) || s.note?.includes(keyword) || s.tags?.some((t) => t.includes(keyword))
-    )
+    where += " AND (prompt LIKE ? OR note LIKE ? OR tags LIKE ?)"
+    const kw = `%${keyword}%`
+    params.push(kw, kw, kw)
   }
 
-  if (sortBy === 'hot') {
-    cases.sort((a, b) => b.likeCount - a.likeCount)
-  } else {
-    cases.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-  }
+  const countRow = db.exec(`SELECT COUNT(*) FROM submissions ${where}`, params)
+  const total = countRow[0] ? countRow[0].values[0][0] : 0
 
-  const total = cases.length
-  const p = +page
-  const ps = +pageSize
-  const list = cases.slice((p - 1) * ps, p * ps).map((s) => ({
-    ...s,
-    liked: (db.likes[s.id] || []).includes(req.user?.id),
-  }))
+  const order = sortBy === 'hot' ? "like_count DESC" : "created_at DESC"
+  const offset = (+page - 1) * +pageSize
+  const results = db.exec(
+    `SELECT id, author, prompt, platform, category, ai_answer, satisfaction, is_good_case, tags, like_count, comment_count, created_at FROM submissions ${where} ORDER BY ${order} LIMIT ? OFFSET ?`,
+    [...params, +pageSize, offset]
+  )
+
+  const list = results[0] ? results[0].values.map(row => ({
+    id: row[0],
+    author: row[1],
+    prompt: row[2],
+    platform: row[3],
+    category: row[4],
+    aiAnswer: row[5],
+    satisfaction: row[6],
+    isGoodCase: !!row[7],
+    tags: JSON.parse(row[8] || '[]'),
+    likeCount: row[9],
+    commentCount: row[10],
+    createdAt: row[11],
+  })) : []
+
+  // 点赞标记（游客跳过）
+  if (req.user?.id && req.user.id !== 'guest') {
+    for (const item of list) {
+      const likeRow = db.exec("SELECT 1 FROM likes WHERE case_id = ? AND user_id = ?", [item.id, req.user.id])
+      item.liked = !!(likeRow[0] && likeRow[0].values.length)
+    }
+  }
 
   res.json({ code: 0, data: { list, total } })
 })
@@ -215,33 +298,36 @@ app.get('/api/cases', (req, res) => {
 // ====== 点赞 ======
 
 app.post('/api/cases/:id/like', (req, res) => {
-  const db = loadDb()
   const userId = req.body.userId || 'anonymous'
-  const submission = db.submissions.find((s) => s.id === req.params.id)
 
-  if (!submission) {
-    return res.status(404).json({ message: '案例不存在' })
-  }
+  const existing = db.exec("SELECT 1 FROM likes WHERE case_id = ? AND user_id = ?", [req.params.id, userId])
+  const alreadyLiked = !!(existing[0] && existing[0].values.length)
 
-  if (!db.likes[submission.id]) db.likes[submission.id] = []
-  const idx = db.likes[submission.id].indexOf(userId)
-  if (idx > -1) {
-    db.likes[submission.id].splice(idx, 1)
-    submission.likeCount = Math.max(0, submission.likeCount - 1)
+  if (alreadyLiked) {
+    db.run("DELETE FROM likes WHERE case_id = ? AND user_id = ?", [req.params.id, userId])
+    db.run("UPDATE submissions SET like_count = MAX(0, like_count - 1) WHERE id = ?", [req.params.id])
   } else {
-    db.likes[submission.id].push(userId)
-    submission.likeCount++
+    db.run("INSERT INTO likes (case_id, user_id) VALUES (?, ?)", [req.params.id, userId])
+    db.run("UPDATE submissions SET like_count = like_count + 1 WHERE id = ?", [req.params.id])
   }
+  saveDb()
 
-  saveDb(db)
-  res.json({ code: 0, data: { liked: idx === -1, likeCount: submission.likeCount } })
+  const likeRow = db.exec("SELECT like_count FROM submissions WHERE id = ?", [req.params.id])
+  const likeCount = likeRow[0] ? likeRow[0].values[0][0] : 0
+
+  res.json({ code: 0, data: { liked: !alreadyLiked, likeCount } })
 })
 
 // ====== 评论 ======
 
 app.get('/api/cases/:id/comments', (req, res) => {
-  const db = loadDb()
-  const comments = (db.comments || []).filter((c) => c.caseId === req.params.id).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+  const results = db.exec(
+    "SELECT id, author, content, created_at FROM comments WHERE case_id = ? ORDER BY created_at DESC",
+    [req.params.id]
+  )
+  const comments = results[0] ? results[0].values.map(row => ({
+    id: row[0], author: row[1], content: row[2], createdAt: row[3],
+  })) : []
   res.json({ code: 0, data: comments })
 })
 
@@ -249,28 +335,20 @@ app.post('/api/cases/:id/comments', authMiddleware, (req, res) => {
   const { content } = req.body
   if (!content) return res.status(400).json({ message: '评论内容不能为空' })
 
-  const db = loadDb()
-  if (!db.comments) db.comments = []
+  const id = genId()
+  db.run("INSERT INTO comments (id, case_id, author, content) VALUES (?, ?, ?, ?)", [id, req.params.id, req.user.name, content])
+  db.run("UPDATE submissions SET comment_count = comment_count + 1 WHERE id = ?", [req.params.id])
+  saveDb()
 
-  const comment = {
-    id: genId(),
-    caseId: req.params.id,
-    author: req.user.name,
-    content,
-    createdAt: new Date().toISOString(),
-  }
-
-  db.comments.push(comment)
-  const submission = db.submissions.find((s) => s.id === req.params.id)
-  if (submission) submission.commentCount = (submission.commentCount || 0) + 1
-
-  saveDb(db)
-  res.json({ code: 0, data: comment })
+  res.json({ code: 0, data: { id, caseId: req.params.id, author: req.user.name, content, createdAt: new Date().toISOString() } })
 })
 
 // ====== 启动 ======
 
-app.listen(PORT, () => {
-  console.log(`后端服务已启动: http://localhost:${PORT}`)
-  console.log(`可用账号: 任意学号 + 任意密码即可注册/登录`)
+initDb().then(() => {
+  app.listen(PORT, () => {
+    console.log(`后端服务已启动: http://localhost:${PORT}`)
+    console.log(`SQLite 数据库: ${DB_PATH}`)
+    console.log('可用账号: 任意学号 + 任意密码即可注册/登录')
+  })
 })
