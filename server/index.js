@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import initSqlJs from 'sql.js'
+import bcrypt from 'bcryptjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const JWT_SECRET = 'ai-crowdsourcing-secret-key-2024'
@@ -35,6 +36,8 @@ async function initDb() {
   if (fs.existsSync(DB_PATH)) {
     const buffer = fs.readFileSync(DB_PATH)
     db = new SQL.Database(buffer)
+    // 迁移：给旧数据库加 password_hash 列
+    try { db.run("ALTER TABLE users ADD COLUMN password_hash TEXT") } catch {}
     return
   }
 
@@ -43,8 +46,9 @@ async function initDb() {
   db.run(`
     CREATE TABLE users (
       id TEXT PRIMARY KEY,
-      student_id TEXT UNIQUE,
+      student_id TEXT UNIQUE NOT NULL,
       name TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
       role TEXT DEFAULT 'student',
       created_at TEXT DEFAULT (datetime('now'))
     )
@@ -116,30 +120,52 @@ function authMiddleware(req, res, next) {
 
 // ====== 认证 ======
 
+app.post('/api/auth/register', (req, res) => {
+  const { studentId, name, password } = req.body
+  if (!studentId || !name || !password) {
+    return res.status(400).json({ message: '学号、姓名和密码不能为空' })
+  }
+  if (password.length < 6) {
+    return res.status(400).json({ message: '密码至少6位' })
+  }
+
+  const existing = db.exec('SELECT 1 FROM users WHERE student_id = ?', [studentId])
+  if (existing[0] && existing[0].values.length) {
+    return res.status(400).json({ message: '该学号已注册' })
+  }
+
+  const id = genId()
+  const hash = bcrypt.hashSync(password, 10)
+  db.run('INSERT INTO users (id, student_id, name, password_hash) VALUES (?, ?, ?, ?)', [id, studentId, name, hash])
+  saveDb()
+
+  const user = { id, studentId, name, role: 'student' }
+  const token = jwt.sign({ id: user.id, studentId: user.studentId, name: user.name, role: user.role }, JWT_SECRET, { expiresIn: '7d' })
+  res.json({ code: 0, data: { token, user } })
+})
+
 app.post('/api/auth/login', (req, res) => {
   const { studentId, password } = req.body
   if (!studentId || !password) {
     return res.status(400).json({ message: '学号和密码不能为空' })
   }
 
-  let user = db.exec('SELECT id, student_id, name, role FROM users WHERE student_id = ?', [studentId])
-  if (user.length && user[0].values.length) {
-    user = {
-      id: user[0].values[0][0],
-      studentId: user[0].values[0][1],
-      name: user[0].values[0][2],
-      role: user[0].values[0][3],
-    }
-  } else {
-    const id = genId()
-    const name = `同学${studentId.slice(-3)}`
-    db.run('INSERT INTO users (id, student_id, name) VALUES (?, ?, ?)', [id, studentId, name])
-    saveDb()
-    user = { id, studentId, name, role: 'student' }
+  const rows = db.exec('SELECT id, student_id, name, role, password_hash FROM users WHERE student_id = ?', [studentId])
+  if (!rows[0] || !rows[0].values.length) {
+    return res.status(400).json({ message: '学号未注册' })
   }
 
-  const token = jwt.sign({ id: user.id, studentId: user.studentId, name: user.name, role: user.role }, JWT_SECRET, { expiresIn: '7d' })
-  res.json({ code: 0, data: { token, user } })
+  const row = rows[0].values[0]
+  const hash = row[4]
+
+  // 兼容旧数据（无密码哈希的用户）
+  if (!hash || bcrypt.compareSync(password, hash)) {
+    const user = { id: row[0], studentId: row[1], name: row[2], role: row[3] }
+    const token = jwt.sign({ id: user.id, studentId: user.studentId, name: user.name, role: user.role }, JWT_SECRET, { expiresIn: '7d' })
+    return res.json({ code: 0, data: { token, user } })
+  }
+
+  res.status(400).json({ message: '密码错误' })
 })
 
 app.post('/api/auth/logout', (req, res) => {
@@ -349,6 +375,6 @@ initDb().then(() => {
   app.listen(PORT, () => {
     console.log(`后端服务已启动: http://localhost:${PORT}`)
     console.log(`SQLite 数据库: ${DB_PATH}`)
-    console.log('可用账号: 任意学号 + 任意密码即可注册/登录')
+    console.log('请先注册账号再登录')
   })
 })
