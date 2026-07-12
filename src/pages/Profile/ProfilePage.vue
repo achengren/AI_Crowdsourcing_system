@@ -43,6 +43,9 @@
                   </a-space>
                 </template>
               </a-list-item-meta>
+              <template #actions>
+                <a-button type="link" danger size="small" @click="onDelete(item)">删除</a-button>
+              </template>
             </a-list-item>
           </template>
         </a-list>
@@ -54,9 +57,10 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import { Modal } from 'ant-design-vue'
 import AppLayout from '../../components/layout/AppLayout.vue'
 import { useAuthStore } from '../../store/auth'
-import { getMySubmissions } from '../../api/submission'
+import { getMySubmissions, deleteSubmission } from '../../api/submission'
 
 const auth = useAuthStore()
 const loading = ref(false)
@@ -86,6 +90,23 @@ onMounted(async () => {
     loading.value = false
   }
 })
+
+async function onDelete(item) {
+  Modal.confirm({
+    title: '确认删除',
+    content: `确定要删除这条提交吗？"${item.prompt?.slice(0, 40)}..."`,
+    okText: '删除',
+    okType: 'danger',
+    cancelText: '取消',
+    onOk: async () => {
+      try {
+        await deleteSubmission(item.id)
+        submissions.value = submissions.value.filter(s => s.id !== item.id)
+        stats[0].value = Math.max(0, stats[0].value - 1)
+      } catch { /* ignore */ }
+    },
+  })
+}
 
 function categoryColor(category) {
   const map = {

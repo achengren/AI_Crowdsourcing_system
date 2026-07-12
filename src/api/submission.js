@@ -23,3 +23,19 @@ export function getComments(caseId) {
 export function addComment(caseId, data) {
   return client.post(`/cases/${caseId}/comments`, data)
 }
+
+export function parseLink(url) {
+  return client.post('/parse-link', { url })
+}
+
+export function deleteSubmission(id) {
+  return client.delete(`/submissions/${id}`)
+}
+
+export function uploadImage(file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return client.post('/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}

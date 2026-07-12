@@ -7,8 +7,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import initSqlJs from 'sql.js'
 import bcrypt from 'bcryptjs'
+import multer from 'multer'
 import 'dotenv/config'
 import OpenAI from 'openai'
+import { parseLink } from './linkParser.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const JWT_SECRET = 'ai-crowdsourcing-secret-key-2024'
@@ -61,6 +63,7 @@ async function initDb() {
     db = new SQL.Database(buffer)
     // 迁移：给旧数据库加 password_hash 列
     try { db.run("ALTER TABLE users ADD COLUMN password_hash TEXT") } catch {}
+    try { db.run("ALTER TABLE submissions ADD COLUMN images TEXT DEFAULT '[]'") } catch {}
     // 迁移：加对话和消息表
     try { db.run("CREATE TABLE conversations (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT DEFAULT '新对话', created_at TEXT DEFAULT (datetime('now')))") } catch {}
     try { db.run("CREATE TABLE messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')))") } catch {}
@@ -94,6 +97,7 @@ async function initDb() {
       is_good_case INTEGER DEFAULT 0,
       note TEXT DEFAULT '',
       tags TEXT DEFAULT '[]',
+      images TEXT DEFAULT '[]',
       like_count INTEGER DEFAULT 0,
       comment_count INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')),
@@ -147,8 +151,27 @@ async function initDb() {
 // ====== 中间件 ======
 
 const app = express()
+const UPLOADS_DIR = path.join(__dirname, 'uploads')
+
+const storage = multer.diskStorage({
+  destination: UPLOADS_DIR,
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname) || '.png'
+    cb(null, `${genId()}${ext}`)
+  },
+})
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (_req, file, cb) => {
+    const allowed = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+    cb(null, allowed.includes(file.mimetype))
+  },
+})
+
 app.use(cors())
 app.use(express.json())
+app.use('/uploads', express.static(UPLOADS_DIR))
 
 function authMiddleware(req, res, next) {
   if (req.headers.authorization === 'Bearer guest') {
@@ -353,10 +376,61 @@ app.post('/api/chat/send', authMiddleware, async (req, res) => {
   }
 })
 
+// ====== 图片上传 ======
+
+app.post('/api/upload', authMiddleware, upload.single('file'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ message: '请选择图片文件' })
+  }
+  const url = `/uploads/${req.file.filename}`
+  res.json({ code: 0, data: { url, name: req.file.originalname } })
+})
+
+// ====== 链接解析 ======
+
+app.post('/api/parse-link', authMiddleware, async (req, res) => {
+  const { url } = req.body
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ message: '请提供要解析的链接' })
+  }
+
+  // SSRF 防护：仅允许 http/https
+  let parsed
+  try {
+    parsed = new URL(url)
+  } catch {
+    return res.status(400).json({ message: '链接格式无效' })
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    return res.status(400).json({ message: '仅支持 http/https 链接' })
+  }
+
+  // 白名单域名
+  const allowedHosts = [
+    'chat.deepseek.com',
+    'chatgpt.com',
+    'claude.ai',
+    'kimi.moonshot.cn',
+    'tongyi.aliyun.com',
+  ]
+  const isAllowed = allowedHosts.some(h => parsed.hostname === h || parsed.hostname.endsWith('.' + h))
+  if (!isAllowed) {
+    return res.status(400).json({ message: '暂不支持该网站的链接解析' })
+  }
+
+  try {
+    const result = await parseLink(url)
+    res.json({ code: 0, data: result })
+  } catch (err) {
+    console.error('链接解析失败:', err.message)
+    res.status(400).json({ message: err.message || '解析失败，请手动填写内容' })
+  }
+})
+
 // ====== 提交案例 ======
 
 app.post('/api/submissions', authMiddleware, (req, res) => {
-  const { prompt, platform, category, aiAnswer, shareLink, satisfaction, isGoodCase, note, tags } = req.body
+  const { prompt, platform, category, aiAnswer, shareLink, satisfaction, isGoodCase, note, tags, images } = req.body
   if (!prompt || !platform || !category) {
     return res.status(400).json({ message: 'Prompt、AI平台和分类为必填项' })
   }
@@ -386,15 +460,15 @@ app.post('/api/submissions', authMiddleware, (req, res) => {
   const id = genId()
   const now = new Date().toISOString()
   db.run(
-    `INSERT INTO submissions (id, user_id, author, prompt, platform, category, ai_answer, share_link, satisfaction, is_good_case, note, tags, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, req.user.id, req.user.name, prompt, platform, category, aiAnswer || '', shareLink || '', satisfaction || 0, isGoodCase ? 1 : 0, note || '', JSON.stringify(tags || []), now]
+    `INSERT INTO submissions (id, user_id, author, prompt, platform, category, ai_answer, share_link, satisfaction, is_good_case, note, tags, images, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, req.user.id, req.user.name, prompt, platform, category, aiAnswer || '', shareLink || '', satisfaction || 0, isGoodCase ? 1 : 0, note || '', JSON.stringify(tags || []), JSON.stringify(images || []), now]
   )
   saveDb()
 
   res.json({
     code: 0,
-    data: { id, userId: req.user.id, author: req.user.name, prompt, platform, category, aiAnswer, shareLink, satisfaction, isGoodCase, note, tags, likeCount: 0, commentCount: 0, createdAt: now },
+    data: { id, userId: req.user.id, author: req.user.name, prompt, platform, category, aiAnswer, shareLink, satisfaction, isGoodCase, note, tags, images: images || [], likeCount: 0, commentCount: 0, createdAt: now },
   })
 })
 
@@ -406,12 +480,12 @@ function parseTags(raw) {
 
 app.get('/api/submissions/my', authMiddleware, (req, res) => {
   const results = db.exec(
-    "SELECT id, prompt, platform, category, ai_answer, satisfaction, is_good_case, tags, like_count, comment_count, created_at FROM submissions WHERE user_id = ? ORDER BY created_at DESC LIMIT 50",
+    "SELECT id, prompt, platform, category, ai_answer, satisfaction, is_good_case, tags, images, like_count, comment_count, created_at FROM submissions WHERE user_id = ? ORDER BY created_at DESC LIMIT 50",
     [req.user.id]
   )
 
   const list = results[0] ? results[0].values.map(row => ({
-    id: row[0], prompt: row[1], platform: row[2], category: row[3], aiAnswer: row[4], satisfaction: row[5], isGoodCase: !!row[6], tags: parseTags(row[7]), likeCount: row[8], commentCount: row[9], createdAt: row[10],
+    id: row[0], prompt: row[1], platform: row[2], category: row[3], aiAnswer: row[4], satisfaction: row[5], isGoodCase: !!row[6], tags: parseTags(row[7]), images: parseTags(row[8]), likeCount: row[9], commentCount: row[10], createdAt: row[11],
   })) : []
 
   // 统计
@@ -435,6 +509,28 @@ app.get('/api/submissions/my', authMiddleware, (req, res) => {
   }
 
   res.json({ code: 0, data: { list, stats } })
+})
+
+// ====== 删除提交 ======
+
+app.delete('/api/submissions/:id', authMiddleware, (req, res) => {
+  const row = db.exec(
+    'SELECT user_id FROM submissions WHERE id = ?',
+    [req.params.id]
+  )
+  if (!row[0] || !row[0].values.length) {
+    return res.status(404).json({ message: '该案例不存在' })
+  }
+  if (row[0].values[0][0] !== req.user.id) {
+    return res.status(403).json({ message: '无权删除他人的案例' })
+  }
+
+  db.run('DELETE FROM likes WHERE case_id = ?', [req.params.id])
+  db.run('DELETE FROM comments WHERE case_id = ?', [req.params.id])
+  db.run('DELETE FROM submissions WHERE id = ?', [req.params.id])
+  saveDb()
+
+  res.json({ code: 0, data: null })
 })
 
 // ====== 案例广场 ======
@@ -461,7 +557,7 @@ app.get('/api/cases', optionalAuth, (req, res) => {
   const order = sortBy === 'hot' ? "like_count DESC" : "created_at DESC"
   const offset = (+page - 1) * +pageSize
   const results = db.exec(
-    `SELECT id, author, prompt, platform, category, ai_answer, satisfaction, is_good_case, tags, like_count, comment_count, created_at FROM submissions ${where} ORDER BY ${order} LIMIT ? OFFSET ?`,
+    `SELECT id, author, prompt, platform, category, ai_answer, satisfaction, is_good_case, tags, images, like_count, comment_count, created_at FROM submissions ${where} ORDER BY ${order} LIMIT ? OFFSET ?`,
     [...params, +pageSize, offset]
   )
 
@@ -475,9 +571,10 @@ app.get('/api/cases', optionalAuth, (req, res) => {
     satisfaction: row[6],
     isGoodCase: !!row[7],
     tags: parseTags(row[8]),
-    likeCount: row[9],
-    commentCount: row[10],
-    createdAt: row[11],
+    images: parseTags(row[9]),
+    likeCount: row[10],
+    commentCount: row[11],
+    createdAt: row[12],
   })) : []
 
   // 点赞标记（游客跳过）

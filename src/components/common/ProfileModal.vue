@@ -50,6 +50,9 @@
                         <a-rate :value="item.satisfaction" :count="5" disabled style="font-size: 12px; margin-left: 8px" />
                       </template>
                     </a-list-item-meta>
+                    <template #actions>
+                      <a-button type="link" danger size="small" @click="onDelete(item)">删除</a-button>
+                    </template>
                   </a-list-item>
                 </template>
               </a-list>
@@ -69,8 +72,9 @@
 <script setup>
 import { ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { Modal } from 'ant-design-vue'
 import { useAuthStore } from '../../store/auth'
-import { getMySubmissions } from '../../api/submission'
+import { getMySubmissions, deleteSubmission } from '../../api/submission'
 
 defineProps({ visible: Boolean })
 defineEmits(['close'])
@@ -105,6 +109,24 @@ async function fetchData() {
   } catch { /* ignore */ } finally {
     loading.value = false
   }
+}
+
+async function onDelete(item) {
+  Modal.confirm({
+    title: '确认删除',
+    content: `确定要删除这条提交吗？"${item.prompt?.slice(0, 40)}..."`,
+    okText: '删除',
+    okType: 'danger',
+    cancelText: '取消',
+    onOk: async () => {
+      try {
+        await deleteSubmission(item.id)
+        submissions.value = submissions.value.filter(s => s.id !== item.id)
+        // 刷新统计
+        stats[0].value = Math.max(0, stats[0].value - 1)
+      } catch { /* ignore */ }
+    },
+  })
 }
 
 function onLogout() {

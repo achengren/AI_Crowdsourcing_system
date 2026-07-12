@@ -54,6 +54,7 @@
           <div class="case-card-top">
             <a-tag :color="categoryColor(item.category)">{{ categoryLabel(item.category) }}</a-tag>
             <a-tag>{{ item.platform }}</a-tag>
+            <span v-if="item.images?.length" class="card-img-badge"><PictureOutlined /> {{ item.images.length }}</span>
           </div>
 
           <div class="case-prompt" @click="openDetail(item)">{{ item.prompt }}</div>
@@ -104,6 +105,19 @@
       :destroy-on-close="true"
     >
       <a-form :model="form" layout="vertical" @finish="onSubmit" ref="formRef">
+        <a-form-item label="输入链接">
+          <a-input-search
+            v-model:value="linkUrl"
+            placeholder="粘贴 AI 对话分享链接，如 https://chat.deepseek.com/share/..."
+            enter-button="解析"
+            :loading="parsing"
+            @search="onParseLink"
+          />
+          <div style="font-size: 12px; color: #999; margin-top: 4px">
+            支持 DeepSeek、ChatGPT、Claude、Kimi、通义千问等平台的分享链接，自动提取对话内容
+          </div>
+        </a-form-item>
+
         <a-form-item label="Prompt（必填）" name="prompt" :rules="[{ required: true, message: '请输入你的 Prompt' }]">
           <a-textarea v-model:value="form.prompt" :rows="3" placeholder="描述你的信息需求和给 AI 的提示词..." />
         </a-form-item>
@@ -143,6 +157,25 @@
 
         <a-form-item label="AI 回答">
           <a-textarea v-model:value="form.aiAnswer" :rows="3" placeholder="粘贴 AI 的完整回答..." />
+        </a-form-item>
+
+        <a-form-item label="相关截图">
+          <div v-if="parsedFiles.length" style="font-size: 12px; color: #1677ff; margin-bottom: 8px">
+            此对话包含 {{ parsedFiles.length }} 个文件：{{ parsedFiles.map(f => f.name).join(', ') }}，请手动上传相关截图
+          </div>
+          <a-upload
+            v-model:file-list="uploadFileList"
+            list-type="picture-card"
+            :before-upload="onBeforeUpload"
+            @preview="onPreviewImage"
+            @remove="onRemoveImage"
+            accept="image/*"
+          >
+            <div v-if="uploadFileList.length < 6">
+              <PlusOutlined />
+              <div style="margin-top: 8px">上传</div>
+            </div>
+          </a-upload>
         </a-form-item>
 
         <a-row :gutter="16">
@@ -221,6 +254,18 @@
             {{ detailAnswerCollapsed ? '展开全部' : '收起' }}
           </a-button>
         </div>
+        <div class="detail-section" v-if="detailCase.images?.length">
+          <div class="detail-section-title">相关截图</div>
+          <div class="detail-images">
+            <img
+              v-for="(url, idx) in detailCase.images"
+              :key="idx"
+              :src="url"
+              class="detail-img"
+              @click="onPreviewImage(detailCase.images, idx)"
+            />
+          </div>
+        </div>
         <a-divider>评论</a-divider>
         <a-list :data-source="detailComments" size="small" v-if="detailComments.length">
           <template #renderItem="{ item: c }">
@@ -236,6 +281,18 @@
         </div>
       </div>
     </a-modal>
+
+    <!-- 图片预览 -->
+    <a-modal
+      :open="previewVisible"
+      :footer="null"
+      :title="null"
+      width="auto"
+      centered
+      @cancel="previewVisible = false"
+    >
+      <img :src="previewSrc" style="max-width: 80vw; max-height: 80vh; display: block" />
+    </a-modal>
   </div>
 </template>
 
@@ -243,9 +300,9 @@
 import { reactive, ref, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { PlusOutlined, LikeOutlined, CommentOutlined, DownOutlined, UpOutlined } from '@ant-design/icons-vue'
+import { PlusOutlined, LikeOutlined, CommentOutlined, DownOutlined, UpOutlined, PictureOutlined, InboxOutlined } from '@ant-design/icons-vue'
 import ConversationSidebar from '../../components/common/ConversationSidebar.vue'
-import { getCases, likeCase, getComments, addComment, submitCase } from '../../api/submission'
+import { getCases, likeCase, getComments, addComment, submitCase, parseLink, uploadImage } from '../../api/submission'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 
@@ -257,6 +314,9 @@ watch(() => route.query.submit, (val) => {
   if (val === '1') {
     form.prompt = route.query.prompt || ''
     form.aiAnswer = route.query.aiAnswer || ''
+    parsedFiles.value = []
+    uploadFileList.value = []
+    linkUrl.value = ''
     showSubmitModal.value = true
     router.replace({ query: {} })
   }
@@ -306,12 +366,74 @@ async function onLike(item) {
 // 提交
 const showSubmitModal = ref(false)
 const submitting = ref(false)
+const parsing = ref(false)
+const linkUrl = ref('')
 const formRef = ref()
 const form = reactive({
   prompt: '', platform: undefined, category: undefined,
   aiAnswer: '', satisfaction: 0, isGoodCase: false,
-  note: '', tags: [],
+  note: '', tags: [], shareLink: '', images: [],
 })
+
+const parsedFiles = ref([])
+
+async function onParseLink() {
+  if (!linkUrl.value.trim()) return
+  parsing.value = true
+  try {
+    const res = await parseLink(linkUrl.value.trim())
+    const d = res.data
+    if (d.prompt) form.prompt = d.prompt
+    if (d.aiAnswer) form.aiAnswer = d.aiAnswer
+    if (d.platform) form.platform = d.platform
+    form.shareLink = linkUrl.value.trim()
+    parsedFiles.value = d.files || []
+    message.success('链接解析成功，内容已自动填入')
+  } catch (err) {
+    message.error(err.response?.data?.message || '链接解析失败，请手动填写')
+  } finally {
+    parsing.value = false
+  }
+}
+
+// 图片上传
+const uploadFileList = ref([])
+const previewVisible = ref(false)
+const previewSrc = ref('')
+
+async function onBeforeUpload(file) {
+  try {
+    const res = await uploadImage(file)
+    const url = res.data.url
+    form.images.push(url)
+    uploadFileList.value.push({
+      uid: file.uid || Date.now().toString(),
+      name: file.name,
+      status: 'done',
+      url,
+      thumbUrl: url,
+    })
+  } catch {
+    message.error('图片上传失败')
+  }
+  return false // 阻止默认上传行为
+}
+
+function onRemoveImage(file) {
+  const idx = form.images.indexOf(file.url)
+  if (idx >= 0) form.images.splice(idx, 1)
+}
+
+function onPreviewImage(fileOrList, idx) {
+  if (Array.isArray(fileOrList)) {
+    // 详情弹窗中的图片
+    previewSrc.value = fileOrList[idx]
+  } else {
+    // 上传列表中的图片
+    previewSrc.value = fileOrList.url || fileOrList.thumbUrl
+  }
+  previewVisible.value = true
+}
 
 async function onSubmit() {
   submitting.value = true
@@ -325,8 +447,11 @@ async function onSubmit() {
     Object.assign(form, {
       prompt: '', platform: undefined, category: undefined,
       aiAnswer: '', satisfaction: 0, isGoodCase: false,
-      note: '', tags: [],
+      note: '', tags: [], shareLink: '', images: [],
     })
+    linkUrl.value = ''
+    parsedFiles.value = []
+    uploadFileList.value = []
     loadCases()
   } catch { /* ignore */ } finally {
     submitting.value = false
@@ -457,7 +582,13 @@ function categoryLabel(c) {
 
 .case-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
 
-.case-card-top { margin-bottom: 12px; }
+.case-card-top { margin-bottom: 12px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+.card-img-badge {
+  font-size: 12px;
+  color: #999;
+  margin-left: auto;
+}
 
 .case-prompt {
   font-size: 15px;
@@ -523,6 +654,23 @@ function categoryLabel(c) {
   line-height: 1.5;
   white-space: normal;
 }
+
+.detail-images {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.detail-img {
+  width: 120px;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid #eee;
+}
+
+.detail-img:hover { border-color: #1677ff; }
 
 .collapsed {
   max-height: 120px;
