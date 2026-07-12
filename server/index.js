@@ -7,6 +7,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import initSqlJs from 'sql.js'
 import bcrypt from 'bcryptjs'
+import 'dotenv/config'
+import OpenAI from 'openai'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const JWT_SECRET = 'ai-crowdsourcing-secret-key-2024'
@@ -15,10 +17,31 @@ const PORT = 3001
 
 const genId = () => crypto.randomBytes(16).toString('hex')
 
+const openai = new OpenAI({
+  baseURL: 'https://api.deepseek.com',
+  apiKey: process.env.DEEPSEEK_API_KEY,
+})
+
 let db
 
+let saveTimer = null
+
 function saveDb() {
-  fs.writeFileSync(DB_PATH, Buffer.from(db.export()))
+  clearTimeout(saveTimer)
+  saveTimer = setTimeout(() => {
+    fs.writeFile(DB_PATH, Buffer.from(db.export()), (err) => {
+      if (err) console.error('数据库保存失败:', err)
+    })
+  }, 200)
+}
+
+function saveDbNow() {
+  clearTimeout(saveTimer)
+  try {
+    fs.writeFileSync(DB_PATH, Buffer.from(db.export()))
+  } catch (err) {
+    console.error('数据库同步保存失败:', err)
+  }
 }
 
 function getWeekRange() {
@@ -38,6 +61,9 @@ async function initDb() {
     db = new SQL.Database(buffer)
     // 迁移：给旧数据库加 password_hash 列
     try { db.run("ALTER TABLE users ADD COLUMN password_hash TEXT") } catch {}
+    // 迁移：加对话和消息表
+    try { db.run("CREATE TABLE conversations (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT DEFAULT '新对话', created_at TEXT DEFAULT (datetime('now')))") } catch {}
+    try { db.run("CREATE TABLE messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')))") } catch {}
     return
   }
 
@@ -94,6 +120,27 @@ async function initDb() {
     )
   `)
 
+  db.run(`
+    CREATE TABLE conversations (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      title TEXT DEFAULT '新对话',
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+  `)
+
+  db.run(`
+    CREATE TABLE messages (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+    )
+  `)
+
   saveDb()
 }
 
@@ -116,6 +163,22 @@ function authMiddleware(req, res, next) {
   } catch {
     res.status(401).json({ message: '登录已过期，请重新登录' })
   }
+}
+
+function optionalAuth(req, res, next) {
+  if (req.headers.authorization === 'Bearer guest') {
+    req.user = { id: 'guest', name: '游客', role: 'guest' }
+    return next()
+  }
+  try {
+    const token = req.headers.authorization?.split(' ')[1]
+    if (token) {
+      req.user = jwt.verify(token, JWT_SECRET)
+    }
+  } catch {
+    // token 无效，以匿名身份继续
+  }
+  next()
 }
 
 // ====== 认证 ======
@@ -159,7 +222,10 @@ app.post('/api/auth/login', (req, res) => {
   const hash = row[4]
 
   // 兼容旧数据（无密码哈希的用户）
-  if (!hash || bcrypt.compareSync(password, hash)) {
+  if (!hash) {
+    return res.status(400).json({ message: '该账号未设置密码，请联系管理员重置' })
+  }
+  if (bcrypt.compareSync(password, hash)) {
     const user = { id: row[0], studentId: row[1], name: row[2], role: row[3] }
     const token = jwt.sign({ id: user.id, studentId: user.studentId, name: user.name, role: user.role }, JWT_SECRET, { expiresIn: '7d' })
     return res.json({ code: 0, data: { token, user } })
@@ -172,20 +238,119 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ code: 0, data: null })
 })
 
-// ====== AI 聊天（Mock）======
+// ====== 会话管理 ======
 
-app.post('/api/chat/send', authMiddleware, (req, res) => {
-  const { prompt } = req.body
-  const replies = [
-    `关于"${prompt.slice(0, 30)}${prompt.length > 30 ? '...' : ''}"这个问题，我的理解是：这是一个非常有趣的话题。不过由于我的训练数据截止日期限制，我可能无法提供最实时的信息。建议你查阅最新的相关资料。`,
-    `这是一个好问题！根据现有的知识，我可以提供一些思路，但具体到你的需求，我可能无法给出最精准的答案。你可以尝试提供更多上下文，或者访问相关的专业数据库获取更详细的信息。`,
-    `抱歉，我无法直接访问外部网站和数据库来验证这个信息。我建议你通过官方渠道查询最新数据，或者提供更多细节让我尝试从已有知识中为你分析。`,
-    `你的问题涉及到实时数据和特定平台的内容，我目前无法直接获取。如果你能提供更多背景信息，我可以帮你梳理分析框架和思考方向。`,
-  ]
-  const reply = replies[Math.floor(Math.random() * replies.length)]
-  setTimeout(() => {
-    res.json({ code: 0, data: { reply } })
-  }, 600 + Math.random() * 800)
+app.get('/api/conversations', authMiddleware, (req, res) => {
+  const rows = db.exec(
+    "SELECT id, title, created_at FROM conversations WHERE user_id = ? ORDER BY created_at DESC",
+    [req.user.id]
+  )
+  const list = rows[0] ? rows[0].values.map(r => ({ id: r[0], title: r[1], createdAt: r[2] })) : []
+  res.json({ code: 0, data: list })
+})
+
+app.post('/api/conversations', authMiddleware, (req, res) => {
+  const id = genId()
+  const title = (req.body.title || '新对话').slice(0, 50)
+  db.run("INSERT INTO conversations (id, user_id, title) VALUES (?, ?, ?)", [id, req.user.id, title])
+  saveDb()
+  res.json({ code: 0, data: { id, title, createdAt: new Date().toISOString() } })
+})
+
+app.delete('/api/conversations/:id', authMiddleware, (req, res) => {
+  const row = db.exec("SELECT user_id FROM conversations WHERE id = ?", [req.params.id])
+  if (!row[0] || !row[0].values.length) {
+    return res.status(404).json({ code: 1, message: '会话不存在' })
+  }
+  if (row[0].values[0][0] !== req.user.id) {
+    return res.status(403).json({ code: 1, message: '无权操作' })
+  }
+  db.run("DELETE FROM messages WHERE conversation_id = ?", [req.params.id])
+  db.run("DELETE FROM conversations WHERE id = ?", [req.params.id])
+  saveDb()
+  res.json({ code: 0, data: null })
+})
+
+app.get('/api/conversations/:id/messages', authMiddleware, (req, res) => {
+  const conv = db.exec("SELECT user_id FROM conversations WHERE id = ?", [req.params.id])
+  if (!conv[0] || !conv[0].values.length) {
+    return res.status(404).json({ code: 1, message: '会话不存在' })
+  }
+  if (conv[0].values[0][0] !== req.user.id) {
+    return res.status(403).json({ code: 1, message: '无权操作' })
+  }
+  const rows = db.exec(
+    "SELECT id, role, content, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC",
+    [req.params.id]
+  )
+  const list = rows[0] ? rows[0].values.map(r => ({ id: r[0], role: r[1], content: r[2], createdAt: r[3] })) : []
+  res.json({ code: 0, data: list })
+})
+
+// ====== AI 聊天（DeepSeek）======
+
+app.post('/api/chat/send', authMiddleware, async (req, res) => {
+  try {
+    const { prompt, conversationId } = req.body
+    if (!prompt) return res.status(400).json({ code: 1, message: '请输入内容' })
+
+    // 没有会话则自动创建
+    let convId = conversationId
+    if (!convId) {
+      convId = genId()
+      const title = prompt.slice(0, 30)
+      db.run("INSERT INTO conversations (id, user_id, title) VALUES (?, ?, ?)", [convId, req.user.id, title])
+    } else {
+      // 验证会话归属
+      const conv = db.exec("SELECT user_id FROM conversations WHERE id = ?", [convId])
+      if (!conv[0] || !conv[0].values.length) {
+        return res.status(404).json({ code: 1, message: '会话不存在' })
+      }
+      if (conv[0].values[0][0] !== req.user.id) {
+        return res.status(403).json({ code: 1, message: '无权操作' })
+      }
+    }
+
+    // 加载历史消息（最近 20 条，避免上下文过长）
+    const history = db.exec(
+      "SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 20",
+      [convId]
+    )
+    const historyMessages = history[0]
+      ? history[0].values.map(r => ({ role: r[0], content: r[1] })).reverse()
+      : []
+
+    // 构建发给 DeepSeek 的消息列表
+    const messages = [
+      { role: 'system', content: '你是一个AI助手。请只回答用户当前最新的问题，不要重复回答对话历史中已经解决过的问题。使用Markdown格式回复，让回答清晰易读。' },
+      ...historyMessages,
+      { role: 'user', content: prompt },
+    ]
+
+    const completion = await openai.chat.completions.create({
+      model: 'deepseek-chat',
+      messages,
+      temperature: 0.7,
+      max_tokens: 2000,
+    })
+
+    const reply = completion.choices[0]?.message?.content || '（未获取到回复）'
+
+    // 保存用户消息和 AI 回复
+    const msg1Id = genId()
+    const msg2Id = genId()
+    const now = new Date().toISOString()
+    db.run("INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, 'user', ?, ?)",
+      [msg1Id, convId, prompt, now])
+    db.run("INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, 'assistant', ?, ?)",
+      [msg2Id, convId, reply, now])
+    saveDb()
+
+    res.json({ code: 0, data: { reply, conversationId: convId } })
+  } catch (err) {
+    console.error('DeepSeek API 错误:', err.message)
+    res.status(500).json({ code: 1, message: 'AI 服务暂时不可用，请稍后重试' })
+  }
 })
 
 // ====== 提交案例 ======
@@ -235,13 +400,18 @@ app.post('/api/submissions', authMiddleware, (req, res) => {
 
 // ====== 我的提交 ======
 
+function parseTags(raw) {
+  try { return JSON.parse(raw || '[]') } catch { return [] }
+}
+
 app.get('/api/submissions/my', authMiddleware, (req, res) => {
   const results = db.exec(
     "SELECT id, prompt, platform, category, ai_answer, satisfaction, is_good_case, tags, like_count, comment_count, created_at FROM submissions WHERE user_id = ? ORDER BY created_at DESC LIMIT 50",
     [req.user.id]
   )
+
   const list = results[0] ? results[0].values.map(row => ({
-    id: row[0], prompt: row[1], platform: row[2], category: row[3], aiAnswer: row[4], satisfaction: row[5], isGoodCase: !!row[6], tags: JSON.parse(row[7]), likeCount: row[8], commentCount: row[9], createdAt: row[10],
+    id: row[0], prompt: row[1], platform: row[2], category: row[3], aiAnswer: row[4], satisfaction: row[5], isGoodCase: !!row[6], tags: parseTags(row[7]), likeCount: row[8], commentCount: row[9], createdAt: row[10],
   })) : []
 
   // 统计
@@ -269,7 +439,7 @@ app.get('/api/submissions/my', authMiddleware, (req, res) => {
 
 // ====== 案例广场 ======
 
-app.get('/api/cases', (req, res) => {
+app.get('/api/cases', optionalAuth, (req, res) => {
   const { category, keyword, sortBy = 'latest', page = 1, pageSize = 12 } = req.query
 
   let where = "WHERE 1=1"
@@ -304,7 +474,7 @@ app.get('/api/cases', (req, res) => {
     aiAnswer: row[5],
     satisfaction: row[6],
     isGoodCase: !!row[7],
-    tags: JSON.parse(row[8] || '[]'),
+    tags: parseTags(row[8]),
     likeCount: row[9],
     commentCount: row[10],
     createdAt: row[11],
@@ -323,8 +493,8 @@ app.get('/api/cases', (req, res) => {
 
 // ====== 点赞 ======
 
-app.post('/api/cases/:id/like', (req, res) => {
-  const userId = req.body.userId || 'anonymous'
+app.post('/api/cases/:id/like', optionalAuth, (req, res) => {
+  const userId = req.user?.id || 'anonymous'
 
   const existing = db.exec("SELECT 1 FROM likes WHERE case_id = ? AND user_id = ?", [req.params.id, userId])
   const alreadyLiked = !!(existing[0] && existing[0].values.length)
@@ -378,3 +548,6 @@ initDb().then(() => {
     console.log('请先注册账号再登录')
   })
 })
+
+process.on('SIGTERM', () => { saveDbNow(); process.exit(0) })
+process.on('SIGINT', () => { saveDbNow(); process.exit(0) })

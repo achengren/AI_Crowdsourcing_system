@@ -18,8 +18,7 @@ const routes = [
   },
   {
     path: '/submit',
-    name: 'Submit',
-    component: () => import('../pages/Submit/SubmitPage.vue'),
+    redirect: '/gallery',
   },
   {
     path: '/profile',

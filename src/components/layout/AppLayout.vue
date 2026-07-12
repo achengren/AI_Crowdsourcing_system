@@ -10,7 +10,7 @@
         @click="onMenuClick"
       />
       <div class="user-area">
-        <span class="username">{{ auth.user?.name || '未登录' }}</span>
+        <a class="username" @click="goProfile">{{ auth.user?.name || '未登录' }}</a>
         <a-button type="link" @click="onLogout" v-if="auth.isLoggedIn && !auth.isGuest">退出</a-button>
         <a-button type="link" @click="onLogout" v-if="auth.isGuest">退出游客</a-button>
       </div>
@@ -41,20 +41,21 @@ const selectedKeys = computed(() => {
   const path = route.path
   if (path.startsWith('/chat')) return ['chat']
   if (path.startsWith('/submit')) return ['submit']
-  if (path.startsWith('/profile')) return ['profile']
   if (path.startsWith('/gallery')) return ['gallery']
   return ['chat']
 })
 
 const menuItems = [
   { key: 'chat', label: 'AI 对话' },
-  { key: 'submit', label: '提交案例' },
-  { key: 'profile', label: '个人主页' },
-  { key: 'gallery', label: '案例广场' },
+  { key: 'gallery', label: '案例' },
 ]
 
 function onMenuClick({ key }) {
   router.push(`/${key}`)
+}
+
+function goProfile() {
+  router.push('/profile')
 }
 
 function onLogout() {
@@ -91,6 +92,11 @@ function onLogout() {
 
 .username {
   color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+}
+
+.username:hover {
+  color: #fff;
 }
 
 .content {
