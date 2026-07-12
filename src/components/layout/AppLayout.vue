@@ -40,7 +40,6 @@ const auth = useAuthStore()
 const selectedKeys = computed(() => {
   const path = route.path
   if (path.startsWith('/chat')) return ['chat']
-  if (path.startsWith('/submit')) return ['submit']
   if (path.startsWith('/gallery')) return ['gallery']
   return ['chat']
 })
