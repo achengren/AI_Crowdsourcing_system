@@ -64,11 +64,12 @@ export async function sendTextMessage(historyMessages, prompt) {
 }
 
 export async function generateTitle(prompt) {
+  const text = (prompt || '').trim() || '用户上传了一张图片请AI分析'
   const titleRes = await ollama.chat.completions.create({
     model: TITLE_MODEL,
     messages: [
       { role: 'system', content: '你是一个标题生成器。根据用户的对话内容生成一个极简短标题（6-10个字），只输出标题本身，不要引号、换行或任何解释。' },
-      { role: 'user', content: (prompt || '').slice(0, 300) },
+      { role: 'user', content: text.slice(0, 300) },
     ],
     max_tokens: 20,
     temperature: 0.3,
