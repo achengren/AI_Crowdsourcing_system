@@ -1,6 +1,9 @@
 import { Router } from 'express'
+import fs from 'node:fs'
+import path from 'node:path'
 import { getDb, genId, saveDb } from '../db.js'
 import { authMiddleware } from '../middleware.js'
+import { UPLOADS_DIR } from '../config.js'
 
 const router = Router()
 
@@ -29,6 +32,22 @@ router.delete('/:id', authMiddleware, (req, res) => {
   if (row[0].values[0][0] !== req.user.id) {
     return res.status(403).json({ code: 1, message: '无权操作' })
   }
+
+  // 删除该会话中所有已上传的图片文件
+  const msgs = getDb().exec(
+    "SELECT content FROM messages WHERE conversation_id = ? AND role = 'user'",
+    [req.params.id]
+  )
+  if (msgs[0]) {
+    for (const [content] of msgs[0].values) {
+      const m = content.match(/^\[image:(.+?)\]\n/)
+      if (m) {
+        const filePath = path.join(UPLOADS_DIR, path.basename(m[1]))
+        try { fs.unlinkSync(filePath) } catch {}
+      }
+    }
+  }
+
   getDb().run("DELETE FROM messages WHERE conversation_id = ?", [req.params.id])
   getDb().run("DELETE FROM conversations WHERE id = ?", [req.params.id])
   saveDb()

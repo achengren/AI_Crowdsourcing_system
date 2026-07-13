@@ -50,6 +50,10 @@ DEEPSEEK_API_KEY=your_deepseek_api_key
 
 视觉识图和标题生成依赖 Ollama 服务，地址及模型名在 `server/config.js` 中配置。
 
+## 备注
+
+- **图片存储**：当前使用本地磁盘存储（`server/uploads/`），删除会话时同步清理关联图片。后期用户量增长后，建议迁移至对象存储（如阿里云 OSS、AWS S3），通过 presigned URL 上传和 CDN 分发，降低磁盘和管理成本。
+
 ## 目录结构
 
 ```
