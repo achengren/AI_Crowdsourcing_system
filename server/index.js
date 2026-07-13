@@ -24,6 +24,30 @@ const openai = new OpenAI({
   apiKey: process.env.DEEPSEEK_API_KEY,
 })
 
+// Ollama 视觉模型客户端（Qwen3-VL-8B 识图）
+const ollama = new OpenAI({
+  baseURL: 'http://162.105.154.176:11434/v1',
+  apiKey: 'ollama',
+})
+
+// 解析消息中的图片前缀 [image:/uploads/xxx.png]\n
+function parseImageContent(raw) {
+  const m = raw.match(/^\[image:(.+?)\]\n/)
+  if (m) {
+    return { imageUrl: m[1], text: raw.slice(m[0].length) }
+  }
+  return { imageUrl: null, text: raw }
+}
+
+function readImageAsBase64(imageUrl) {
+  const filePath = path.join(__dirname, imageUrl)
+  const buffer = fs.readFileSync(filePath)
+  const base64 = buffer.toString('base64')
+  const ext = path.extname(filePath).slice(1).toLowerCase()
+  const mime = ext === 'jpg' ? 'jpeg' : ext
+  return `data:image/${mime};base64,${base64}`
+}
+
 let db
 
 let saveTimer = null
@@ -310,18 +334,18 @@ app.get('/api/conversations/:id/messages', authMiddleware, (req, res) => {
   res.json({ code: 0, data: list })
 })
 
-// ====== AI 聊天（DeepSeek）======
+// ====== AI 聊天（DeepSeek / Ollama 视觉）======
 
 app.post('/api/chat/send', authMiddleware, async (req, res) => {
   try {
-    const { prompt, conversationId } = req.body
-    if (!prompt) return res.status(400).json({ code: 1, message: '请输入内容' })
+    const { prompt, conversationId, imageUrl } = req.body
+    if (!prompt && !imageUrl) return res.status(400).json({ code: 1, message: '请输入内容' })
 
     // 没有会话则自动创建
     let convId = conversationId
     if (!convId) {
       convId = genId()
-      const title = prompt.slice(0, 30)
+      const title = (prompt || '图片对话').slice(0, 30)
       db.run("INSERT INTO conversations (id, user_id, title) VALUES (?, ?, ?)", [convId, req.user.id, title])
     } else {
       // 验证会话归属
@@ -343,35 +367,85 @@ app.post('/api/chat/send', authMiddleware, async (req, res) => {
       ? history[0].values.map(r => ({ role: r[0], content: r[1] })).reverse()
       : []
 
-    // 构建发给 DeepSeek 的消息列表
-    const messages = [
-      { role: 'system', content: '你是一个AI助手。请只回答用户当前最新的问题，不要重复回答对话历史中已经解决过的问题。使用Markdown格式回复，让回答清晰易读。' },
-      ...historyMessages,
-      { role: 'user', content: prompt },
-    ]
+    const isVision = !!imageUrl
+    let reply
 
-    const completion = await openai.chat.completions.create({
-      model: 'deepseek-chat',
-      messages,
-      temperature: 0.7,
-      max_tokens: 2000,
-    })
+    if (isVision) {
+      // 视觉模式：构建多模态消息发给 Qwen3-VL
+      const dataUrl = readImageAsBase64(imageUrl)
 
-    const reply = completion.choices[0]?.message?.content || '（未获取到回复）'
+      const visionMessages = [
+        { role: 'system', content: '你是一个AI视觉助手。请仔细观察用户提供的图片，结合用户的文字描述，给出准确、详细的回答。使用Markdown格式回复。' },
+      ]
+
+      for (const msg of historyMessages) {
+        if (msg.role === 'user') {
+          const parsed = parseImageContent(msg.content)
+          if (parsed.imageUrl) {
+            visionMessages.push({
+              role: 'user',
+              content: [
+                { type: 'text', text: parsed.text || '请分析这张图片' },
+                { type: 'image_url', image_url: { url: readImageAsBase64(parsed.imageUrl) } },
+              ],
+            })
+          } else {
+            visionMessages.push({ role: 'user', content: msg.content })
+          }
+        } else {
+          visionMessages.push({ role: 'assistant', content: msg.content })
+        }
+      }
+
+      // 当前用户消息
+      visionMessages.push({
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt || '请分析这张图片' },
+          { type: 'image_url', image_url: { url: dataUrl } },
+        ],
+      })
+
+      const completion = await ollama.chat.completions.create({
+        model: 'qwen3-vl:8b',
+        messages: visionMessages,
+        temperature: 0.7,
+        max_tokens: 2000,
+      })
+
+      reply = completion.choices[0]?.message?.content || '（未获取到回复）'
+    } else {
+      // 纯文本模式：走 DeepSeek
+      const messages = [
+        { role: 'system', content: '你是一个AI助手。请只回答用户当前最新的问题，不要重复回答对话历史中已经解决过的问题。使用Markdown格式回复，让回答清晰易读。' },
+        ...historyMessages.map(m => ({ role: m.role, content: parseImageContent(m.content).text })),
+        { role: 'user', content: prompt },
+      ]
+
+      const completion = await openai.chat.completions.create({
+        model: 'deepseek-chat',
+        messages,
+        temperature: 0.7,
+        max_tokens: 2000,
+      })
+
+      reply = completion.choices[0]?.message?.content || '（未获取到回复）'
+    }
 
     // 保存用户消息和 AI 回复
+    const userContent = imageUrl ? `[image:${imageUrl}]\n${prompt || ''}` : prompt
     const msg1Id = genId()
     const msg2Id = genId()
     const now = new Date().toISOString()
     db.run("INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, 'user', ?, ?)",
-      [msg1Id, convId, prompt, now])
+      [msg1Id, convId, userContent, now])
     db.run("INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, 'assistant', ?, ?)",
       [msg2Id, convId, reply, now])
     saveDb()
 
     res.json({ code: 0, data: { reply, conversationId: convId } })
   } catch (err) {
-    console.error('DeepSeek API 错误:', err.message)
+    console.error('AI API 错误:', err.message)
     res.status(500).json({ code: 1, message: 'AI 服务暂时不可用，请稍后重试' })
   }
 })

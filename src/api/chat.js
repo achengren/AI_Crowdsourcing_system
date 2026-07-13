@@ -1,7 +1,7 @@
 import client from './client'
 
-export function sendMessage({ prompt, conversationId }) {
-  return client.post('/chat/send', { prompt, conversationId })
+export function sendMessage({ prompt, conversationId, imageUrl }) {
+  return client.post('/chat/send', { prompt, conversationId, imageUrl })
 }
 
 export function getConversations() {

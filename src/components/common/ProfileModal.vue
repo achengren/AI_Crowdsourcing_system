@@ -19,6 +19,7 @@
                   <a-tag v-else color="blue">{{ auth.user?.studentId }}</a-tag>
                 </a-space>
               </div>
+              <a-button type="link" danger @click="onLogout" class="logout-btn">退出登录</a-button>
             </div>
 
             <!-- 数据统计 -->
@@ -57,10 +58,6 @@
                 </template>
               </a-list>
               <a-empty v-if="!loading && submissions.length === 0" description="暂无提交记录" :image-style="{ height: '40px' }" />
-
-              <div style="margin-top: 16px; text-align: right">
-                <a-button type="link" danger @click="onLogout">退出登录</a-button>
-              </div>
             </div>
           </div>
         </div>
@@ -76,8 +73,8 @@ import { Modal } from 'ant-design-vue'
 import { useAuthStore } from '../../store/auth'
 import { getMySubmissions, deleteSubmission } from '../../api/submission'
 
-defineProps({ visible: Boolean })
-defineEmits(['close'])
+const props = defineProps({ visible: Boolean })
+const emit = defineEmits(['close'])
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -130,6 +127,7 @@ async function onDelete(item) {
 }
 
 function onLogout() {
+  emit('close')
   auth.logout()
   router.push('/login')
 }
@@ -194,6 +192,11 @@ function categoryLabel(c) {
   display: flex;
   align-items: center;
   gap: 20px;
+}
+
+.logout-btn {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .user-detail h2 {

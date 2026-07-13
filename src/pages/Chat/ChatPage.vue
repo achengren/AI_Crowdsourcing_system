@@ -14,7 +14,10 @@
           :class="['message', msg.role === 'user' ? 'message-user' : 'message-ai']"
         >
           <div class="message-body">
-            <div class="message-text" v-if="msg.role === 'user'">{{ msg.content }}</div>
+            <div class="message-text" v-if="msg.role === 'user'">
+              <img v-if="msg.imageUrl" :src="msg.imageUrl" class="msg-image" @click="previewImage = msg.imageUrl" />
+              <div v-if="msg.content">{{ msg.content }}</div>
+            </div>
             <div class="message-text markdown-body" v-else v-html="renderMd(msg.content)"></div>
             <div class="message-actions" v-if="msg.role === 'ai'">
               <a-rate v-model:value="msg.rating" :count="5" size="small" @change="onRate(msg, $event)" />
@@ -31,7 +34,28 @@
       </div>
 
       <div class="chat-input-area">
+        <div class="image-preview-bar" v-if="imageUrl">
+          <div class="preview-thumb">
+            <img :src="imageUrl" />
+            <CloseOutlined class="remove-btn" @click="imageUrl = ''" />
+          </div>
+        </div>
         <div class="chat-input-inner">
+          <input
+            ref="fileInput"
+            type="file"
+            accept="image/*"
+            style="display:none"
+            @change="onFileChange"
+          />
+          <a-button
+            type="text"
+            :loading="uploading"
+            @click="fileInput.click()"
+            class="img-btn"
+          >
+            <PictureOutlined />
+          </a-button>
           <a-textarea
             v-model:value="input"
             :rows="1"
@@ -52,9 +76,10 @@
 import { ref, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { SendOutlined } from '@ant-design/icons-vue'
+import { SendOutlined, PictureOutlined, CloseOutlined } from '@ant-design/icons-vue'
 import ConversationSidebar from '../../components/common/ConversationSidebar.vue'
 import { sendMessage, getConversations, getMessages } from '../../api/chat'
+import { uploadImage } from '../../api/submission'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import hljs from 'highlight.js'
@@ -64,9 +89,13 @@ const router = useRouter()
 const route = useRoute()
 const input = ref('')
 const sending = ref(false)
+const uploading = ref(false)
+const imageUrl = ref('')
+const previewImage = ref('')
 const messages = ref([])
 const messageList = ref(null)
 const activeConvId = ref(null)
+const fileInput = ref(null)
 
 onMounted(async () => {
   // 监听侧边栏的"新建对话"事件
@@ -98,11 +127,15 @@ async function loadConversation(convId) {
   activeConvId.value = convId
   try {
     const res = await getMessages(convId)
-    messages.value = res.data.map(m => ({
-      role: m.role === 'assistant' ? 'ai' : 'user',
-      content: m.content,
-      rating: 0,
-    }))
+    messages.value = res.data.map(m => {
+      const parsed = parseMsgContent(m.content)
+      return {
+        role: m.role === 'assistant' ? 'ai' : 'user',
+        content: parsed.text,
+        imageUrl: parsed.imageUrl,
+        rating: 0,
+      }
+    })
   } catch {
     messages.value = []
   }
@@ -125,15 +158,17 @@ function onEnterPress(e) {
 
 async function onSend() {
   const text = input.value.trim()
-  if (!text || sending.value) return
+  const img = imageUrl.value
+  if ((!text && !img) || sending.value) return
 
-  messages.value.push({ role: 'user', content: text })
+  messages.value.push({ role: 'user', content: text, imageUrl: img })
   input.value = ''
+  imageUrl.value = ''
   sending.value = true
   await scrollToBottom()
 
   try {
-    const res = await sendMessage({ prompt: text, conversationId: activeConvId.value })
+    const res = await sendMessage({ prompt: text, conversationId: activeConvId.value, imageUrl: img })
     messages.value.push({ role: 'ai', content: res.data.reply, rating: 0 })
 
     if (!activeConvId.value) {
@@ -146,6 +181,29 @@ async function onSend() {
     sending.value = false
     await scrollToBottom()
   }
+}
+
+async function onFileChange(e) {
+  const file = e.target.files[0]
+  if (!file) return
+  uploading.value = true
+  try {
+    const res = await uploadImage(file)
+    imageUrl.value = res.data.url
+  } catch {
+    message.error('图片上传失败')
+  } finally {
+    uploading.value = false
+    if (fileInput.value) fileInput.value.value = ''
+  }
+}
+
+function parseMsgContent(raw) {
+  const m = raw.match(/^\[image:(.+?)\]\n/)
+  if (m) {
+    return { imageUrl: m[1], text: raw.slice(m[0].length) }
+  }
+  return { imageUrl: '', text: raw }
 }
 
 function onRate(msg, value) {
@@ -338,4 +396,57 @@ async function scrollToBottom() {
   text-align: left;
 }
 .markdown-body :deep(th) { background: #f5f5f5; font-weight: 600; }
+
+.img-btn {
+  flex-shrink: 0;
+  font-size: 20px;
+  color: #8c8c8c;
+  padding: 0 4px;
+  height: auto;
+}
+
+.img-btn:hover { color: #1677ff; }
+
+.image-preview-bar {
+  display: flex;
+  padding: 0 16px 8px;
+  max-width: 900px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.preview-thumb {
+  position: relative;
+  display: inline-block;
+}
+
+.preview-thumb img {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+
+.preview-thumb .remove-btn {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  font-size: 12px;
+  background: #333;
+  color: #fff;
+  border-radius: 50%;
+  padding: 2px;
+  cursor: pointer;
+}
+
+.msg-image {
+  max-width: 200px;
+  max-height: 200px;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-bottom: 6px;
+  display: block;
+  border: 1px solid #e5e7eb;
+}
 </style>
