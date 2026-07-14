@@ -52,6 +52,7 @@ export async function initDb() {
     try { db.run("ALTER TABLE submissions ADD COLUMN images TEXT DEFAULT '[]'") } catch {}
     try { db.run("CREATE TABLE conversations (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT DEFAULT '新对话', created_at TEXT DEFAULT (datetime('now')))") } catch {}
     try { db.run("CREATE TABLE messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')))") } catch {}
+    try { db.run("ALTER TABLE messages ADD COLUMN quality_flag TEXT DEFAULT ''") } catch {}
     return
   }
 
@@ -125,6 +126,7 @@ export async function initDb() {
       conversation_id TEXT NOT NULL,
       role TEXT NOT NULL,
       content TEXT NOT NULL,
+      quality_flag TEXT DEFAULT '',
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (conversation_id) REFERENCES conversations(id)
     )

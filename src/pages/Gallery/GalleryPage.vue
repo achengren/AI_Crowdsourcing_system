@@ -104,7 +104,7 @@
       :footer="null"
       :destroy-on-close="true"
     >
-      <a-form :model="form" layout="vertical" @finish="onSubmit" ref="formRef">
+      <a-form :model="form" layout="vertical" ref="formRef">
         <a-form-item label="输入链接">
           <a-input-search
             v-model:value="linkUrl"
@@ -200,7 +200,7 @@
         </a-form-item>
 
         <a-form-item>
-          <a-button type="primary" html-type="submit" :loading="submitting" block>提交案例</a-button>
+          <a-button type="primary" :loading="submitting" block @click="handleSubmit">提交案例</a-button>
         </a-form-item>
       </a-form>
     </a-modal>
@@ -297,7 +297,7 @@
 </template>
 
 <script setup>
-import { reactive, ref, onMounted, watch } from 'vue'
+import { reactive, ref, onMounted, onActivated, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { PlusOutlined, LikeOutlined, CommentOutlined, DownOutlined, UpOutlined, PictureOutlined, InboxOutlined } from '@ant-design/icons-vue'
@@ -309,18 +309,41 @@ import DOMPurify from 'dompurify'
 const router = useRouter()
 const route = useRoute()
 
-// 自动弹窗
-watch(() => route.query.submit, (val) => {
-  if (val === '1') {
+// 从 URL query 参数打开提交案例弹窗
+function openSubmitFromQuery() {
+  if (route.query.submit === '1') {
     form.prompt = route.query.prompt || ''
     form.aiAnswer = route.query.aiAnswer || ''
+    form.platform = undefined
+    form.category = undefined
+    form.images = []
     parsedFiles.value = []
     uploadFileList.value = []
     linkUrl.value = ''
+    if (route.query.imageUrl) {
+      form.images.push(route.query.imageUrl)
+      uploadFileList.value.push({
+        uid: 'chat-img',
+        name: '对话图片',
+        status: 'done',
+        url: route.query.imageUrl,
+        thumbUrl: route.query.imageUrl,
+      })
+    }
     showSubmitModal.value = true
     router.replace({ query: {} })
   }
-}, { immediate: true })
+}
+
+// keep-alive 激活时检查（覆盖首次挂载和从 Chat 页切回）
+onActivated(() => {
+  openSubmitFromQuery()
+})
+
+// 已在 Gallery 页面时 query 变化
+watch(() => route.query.submit, (val) => {
+  if (val === '1') openSubmitFromQuery()
+})
 
 // 列表
 const search = ref('')
@@ -435,12 +458,31 @@ function onPreviewImage(fileOrList, idx) {
   previewVisible.value = true
 }
 
+async function handleSubmit() {
+  try {
+    await formRef.value.validate()
+    await onSubmit()
+  } catch (err) {
+    if (err?.errorFields) {
+      message.error('请填写所有必填项：Prompt、AI 平台、分类')
+    }
+  }
+}
+
 async function onSubmit() {
   submitting.value = true
   try {
     await submitCase({
-      ...form,
+      prompt: form.prompt,
+      platform: form.platform,
+      category: form.category,
+      aiAnswer: form.aiAnswer,
       satisfaction: form.satisfaction || 0,
+      isGoodCase: form.isGoodCase,
+      note: form.note,
+      tags: form.tags,
+      shareLink: form.shareLink,
+      images: form.images,
     })
     message.success('案例提交成功！')
     showSubmitModal.value = false
@@ -453,7 +495,10 @@ async function onSubmit() {
     parsedFiles.value = []
     uploadFileList.value = []
     loadCases()
-  } catch { /* ignore */ } finally {
+  } catch (err) {
+    const msg = err.response?.data?.message || '提交失败，请重试'
+    message.error(msg)
+  } finally {
     submitting.value = false
   }
 }

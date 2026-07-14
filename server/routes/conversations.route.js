@@ -63,10 +63,14 @@ router.get('/:id/messages', authMiddleware, (req, res) => {
     return res.status(403).json({ code: 1, message: '无权操作' })
   }
   const rows = getDb().exec(
-    "SELECT id, role, content, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC",
+    "SELECT id, role, content, quality_flag, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC",
     [req.params.id]
   )
-  const list = rows[0] ? rows[0].values.map(r => ({ id: r[0], role: r[1], content: r[2], createdAt: r[3] })) : []
+  const list = rows[0] ? rows[0].values.map(r => {
+    let qualityFlag = null
+    try { qualityFlag = JSON.parse(r[3] || 'null') } catch {}
+    return { id: r[0], role: r[1], content: r[2], qualityFlag, createdAt: r[4] }
+  }) : []
   res.json({ code: 0, data: list })
 })
 

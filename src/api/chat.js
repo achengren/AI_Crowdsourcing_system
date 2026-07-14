@@ -19,3 +19,7 @@ export function deleteConversation(id) {
 export function getMessages(conversationId) {
   return client.get(`/conversations/${conversationId}/messages`)
 }
+
+export function getSolutionSuggestion(prompt, reply) {
+  return client.post('/chat/solution-suggestion', { prompt, reply })
+}

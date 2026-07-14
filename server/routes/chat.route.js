@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { getDb, genId, saveDb } from '../db.js'
 import { authMiddleware } from '../middleware.js'
-import { sendVisionMessage, sendTextMessage, generateTitle } from '../services/chatService.js'
+import { sendVisionMessage, sendTextMessage, generateTitle, evaluateResponseQuality, generateSolutionSuggestion } from '../services/chatService.js'
 
 const router = Router()
 
@@ -37,14 +37,16 @@ router.post('/send', authMiddleware, async (req, res) => {
       ? await sendVisionMessage(historyMessages, prompt, imageUrl)
       : await sendTextMessage(historyMessages, prompt)
 
+    const qualityCheck = await evaluateResponseQuality(reply, prompt)
+
     const userContent = imageUrl ? `[image:${imageUrl}]\n${prompt || ''}` : prompt
     const msg1Id = genId()
     const msg2Id = genId()
     const now = new Date().toISOString()
     getDb().run("INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, 'user', ?, ?)",
       [msg1Id, convId, userContent, now])
-    getDb().run("INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, 'assistant', ?, ?)",
-      [msg2Id, convId, reply, now])
+    getDb().run("INSERT INTO messages (id, conversation_id, role, content, quality_flag, created_at) VALUES (?, ?, 'assistant', ?, ?, ?)",
+      [msg2Id, convId, reply, JSON.stringify(qualityCheck), now])
     saveDb()
 
     if (!conversationId) {
@@ -59,10 +61,22 @@ router.post('/send', authMiddleware, async (req, res) => {
       }
     }
 
-    res.json({ code: 0, data: { reply, conversationId: convId } })
+    res.json({ code: 0, data: { reply, conversationId: convId, qualityFlag: qualityCheck } })
   } catch (err) {
     console.error('AI API 错误:', err.message)
     res.status(500).json({ code: 1, message: 'AI 服务暂时不可用，请稍后重试' })
+  }
+})
+
+router.post('/solution-suggestion', authMiddleware, async (req, res) => {
+  try {
+    const { prompt, reply } = req.body
+    if (!prompt || !reply) return res.status(400).json({ code: 1, message: '缺少参数' })
+    const suggestion = await generateSolutionSuggestion(prompt, reply)
+    res.json({ code: 0, data: { suggestion } })
+  } catch (err) {
+    console.error('生成建议失败:', err.message)
+    res.status(500).json({ code: 1, message: '生成建议失败' })
   }
 })
 

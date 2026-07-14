@@ -21,7 +21,29 @@
             <div class="message-text markdown-body" v-else v-html="renderMd(msg.content)"></div>
             <div class="message-actions" v-if="msg.role === 'ai'">
               <a-rate v-model:value="msg.rating" :count="5" size="small" @change="onRate(msg, $event)" />
-              <a-button size="small" type="link" @click="onSubmitCase(msg, i)">提交为案例</a-button>
+              <template v-if="msg.qualityFlag && msg.qualityFlag.isLowQuality">
+                <a-tag color="warning" class="quality-tag">
+                  <ExclamationCircleOutlined /> 可能存在信息缺失
+                </a-tag>
+                <a-button size="small" type="primary" ghost @click="onSubmitCase(msg, i)">
+                  <UploadOutlined /> 提交为案例
+                </a-button>
+                <a-popover title="改进建议" trigger="click" placement="bottomLeft">
+                  <template #content>
+                    <div v-if="msg.solutionLoading" style="padding: 12px; text-align: center;">
+                      <a-spin size="small" /> 生成中...
+                    </div>
+                    <div v-else-if="msg.solutionSuggestion" class="solution-popover-md" style="max-width: 360px; font-size: 13px;" v-html="renderMd(msg.solutionSuggestion)"></div>
+                    <div v-else style="color: #999;">点击加载改进建议</div>
+                  </template>
+                  <a-button size="small" type="link" :loading="msg.solutionLoading" @click="onGetSuggestion(msg, i)">
+                    <BulbOutlined /> 如何改进
+                  </a-button>
+                </a-popover>
+              </template>
+              <template v-else>
+                <a-button size="small" type="link" @click="onSubmitCase(msg, i)">提交为案例</a-button>
+              </template>
             </div>
           </div>
         </div>
@@ -76,9 +98,9 @@
 import { ref, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { SendOutlined, PictureOutlined, CloseOutlined } from '@ant-design/icons-vue'
+import { SendOutlined, PictureOutlined, CloseOutlined, ExclamationCircleOutlined, UploadOutlined, BulbOutlined } from '@ant-design/icons-vue'
 import ConversationSidebar from '../../components/common/ConversationSidebar.vue'
-import { sendMessage, getConversations, getMessages } from '../../api/chat'
+import { sendMessage, getConversations, getMessages, getSolutionSuggestion } from '../../api/chat'
 import { uploadImage } from '../../api/submission'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -120,7 +142,7 @@ onUnmounted(() => {
 })
 
 watch(() => route.query.conv, async (convId) => {
-  if (convId) await loadConversation(convId)
+  if (convId && convId !== activeConvId.value) await loadConversation(convId)
 })
 
 async function loadConversation(convId) {
@@ -134,6 +156,7 @@ async function loadConversation(convId) {
         content: parsed.text,
         imageUrl: parsed.imageUrl,
         rating: 0,
+        qualityFlag: m.qualityFlag || null,
       }
     })
   } catch {
@@ -169,7 +192,7 @@ async function onSend() {
 
   try {
     const res = await sendMessage({ prompt: text, conversationId: activeConvId.value, imageUrl: img })
-    messages.value.push({ role: 'ai', content: res.data.reply, rating: 0 })
+    messages.value.push({ role: 'ai', content: res.data.reply, rating: 0, qualityFlag: res.data.qualityFlag || null })
 
     if (!activeConvId.value) {
       activeConvId.value = res.data.conversationId
@@ -215,13 +238,34 @@ function onRate(msg, value) {
 
 function onSubmitCase(aiMsg, aiIndex) {
   let userContent = ''
+  let userImageUrl = ''
+  for (let i = aiIndex - 1; i >= 0; i--) {
+    if (messages.value[i].role === 'user') {
+      userContent = messages.value[i].content
+      userImageUrl = messages.value[i].imageUrl || ''
+      break
+    }
+  }
+  const query = { submit: '1', prompt: userContent, aiAnswer: aiMsg.content }
+  if (userImageUrl) query.imageUrl = userImageUrl
+  router.push({ path: '/gallery', query })
+}
+
+async function onGetSuggestion(aiMsg, aiIndex) {
+  let userContent = ''
   for (let i = aiIndex - 1; i >= 0; i--) {
     if (messages.value[i].role === 'user') {
       userContent = messages.value[i].content
       break
     }
   }
-  router.push({ path: '/gallery', query: { submit: '1', prompt: userContent, aiAnswer: aiMsg.content } })
+  messages.value[aiIndex] = { ...aiMsg, solutionLoading: true }
+  try {
+    const res = await getSolutionSuggestion(userContent, aiMsg.content)
+    messages.value[aiIndex] = { ...aiMsg, solutionSuggestion: res.data.suggestion, solutionLoading: false }
+  } catch {
+    messages.value[aiIndex] = { ...aiMsg, solutionSuggestion: '生成失败，请重试', solutionLoading: false }
+  }
 }
 
 function renderMd(text) {
@@ -314,6 +358,11 @@ async function scrollToBottom() {
   align-items: center;
   gap: 8px;
   margin-top: 6px;
+}
+
+.quality-tag {
+  font-size: 12px;
+  line-height: 20px;
 }
 
 .chat-input-area {
@@ -449,4 +498,20 @@ async function scrollToBottom() {
   display: block;
   border: 1px solid #e5e7eb;
 }
+</style>
+
+<style>
+.solution-popover-md h1 { font-size: 1.1em; margin: 0.4em 0 0.2em; }
+.solution-popover-md h2 { font-size: 1em; margin: 0.3em 0 0.15em; }
+.solution-popover-md h3 { font-size: 0.95em; margin: 0.25em 0 0.1em; }
+.solution-popover-md p { margin: 0.2em 0; }
+.solution-popover-md ul, .solution-popover-md ol { padding-left: 1.2em; margin: 0.15em 0; }
+.solution-popover-md li { margin: 0.05em 0; }
+.solution-popover-md code {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+.solution-popover-md strong { font-weight: 600; }
 </style>
