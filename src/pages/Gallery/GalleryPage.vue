@@ -105,7 +105,7 @@
       :destroy-on-close="true"
     >
       <a-form :model="form" layout="vertical" ref="formRef">
-        <a-form-item label="输入链接">
+        <a-form-item label="输入链接" v-if="!isFromChat">
           <a-input-search
             v-model:value="linkUrl"
             placeholder="粘贴 AI 对话分享链接，如 https://chat.deepseek.com/share/..."
@@ -330,6 +330,7 @@ function openSubmitFromQuery() {
         thumbUrl: route.query.imageUrl,
       })
     }
+    isFromChat.value = true
     showSubmitModal.value = true
     router.replace({ query: {} })
   }
@@ -398,6 +399,8 @@ const form = reactive({
   note: '', tags: [], shareLink: '', images: [],
 })
 
+const isFromChat = ref(false)
+watch(showSubmitModal, (val) => { if (!val) isFromChat.value = false })
 const parsedFiles = ref([])
 
 async function onParseLink() {
