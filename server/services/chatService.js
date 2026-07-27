@@ -1,6 +1,6 @@
-import { VISION_MODEL, DEEPSEEK_MODEL, TITLE_MODEL } from '../config.js'
+import { VISION_MODEL, OLLAMA_TEXT_MODEL, TITLE_MODEL } from '../config.js'
 import { parseImageContent, readImageAsBase64 } from '../utils/image.js'
-import { deepseek, ollama } from '../ai.js'
+import { ollama } from '../ai.js'
 
 export async function sendVisionMessage(historyMessages, prompt, imageUrl) {
   const dataUrl = readImageAsBase64(imageUrl)
@@ -53,8 +53,8 @@ export async function sendTextMessage(historyMessages, prompt) {
     { role: 'user', content: prompt },
   ]
 
-  const completion = await deepseek.chat.completions.create({
-    model: DEEPSEEK_MODEL,
+  const completion = await ollama.chat.completions.create({
+    model: OLLAMA_TEXT_MODEL,
     messages,
     temperature: 0.7,
     max_tokens: 2000,

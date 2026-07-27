@@ -36,7 +36,10 @@
         <FolderOutlined />
         <span>案例</span>
       </div>
-      <div class="sidebar-nav-item" @click="showProfile = true">
+      <div
+        :class="['sidebar-nav-item', { active: currentRoute === '/profile' }]"
+        @click="$router.push('/profile')"
+      >
         <UserOutlined />
         <span>{{ auth.user?.name || '个人主页' }}</span>
         <a-button type="link" size="small" @click.stop="onLogout" class="logout-btn">退出</a-button>
@@ -44,7 +47,6 @@
     </div>
   </div>
 
-  <ProfileModal :visible="showProfile" @close="showProfile = false" />
 </template>
 
 <script setup>
@@ -53,14 +55,12 @@ import { useRouter, useRoute } from 'vue-router'
 import { DeleteOutlined, UserOutlined, FolderOutlined } from '@ant-design/icons-vue'
 import { useAuthStore } from '../../store/auth'
 import { getConversations, deleteConversation } from '../../api/chat'
-import ProfileModal from './ProfileModal.vue'
 
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 
 const conversations = ref([])
-const showProfile = ref(false)
 
 const currentRoute = computed(() => route.path)
 const activeConvId = computed(() => route.query.conv || null)

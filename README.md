@@ -4,7 +4,7 @@
 
 ## 功能
 
-- **多模型 AI 对话** — DeepSeek 主对话 + Qwen3-VL 视觉识图 + Llama3.1 自动标题生成
+- **多模型 AI 对话** — Llama3.1 主对话 + Qwen3-VL 视觉识图，全部运行在本地 Ollama；保留 DeepSeek API 接入接口，可一键切换
 - **案例提交** — 两种入口：对话中一键"提交为案例"（自动填入内容），或广场页粘贴分享链接解析后提交；含平台、分类、满意度、标签、截图等
 - **链接解析** — 自动提取 DeepSeek / ChatGPT / Claude / Kimi / 通义千问 分享链接中的对话内容
 - **AI 质量反馈** — 自动检测 AI 回复是否可能存在信息缺失，提示用户并提供"如何改进"建议和快捷提交入口
@@ -17,16 +17,27 @@
 |---|---|
 | 前端 | Vue 3 + Vite + Ant Design Vue + Pinia |
 | 后端 | Express 5 + SQLite (sql.js) |
-| AI | DeepSeek API + Ollama |
+| AI | Ollama（本地模型，无需 API Key）+ DeepSeek API 接口（预留，可切换） |
 | 安全 | JWT + bcrypt + DOMPurify XSS 防护 |
 
 ## AI 模型路由
 
+当前默认使用 Ollama 本地模型，无需配置 API Key 即可运行。项目保留完整 DeepSeek API 接入代码，切换方式见下方说明。
+
 | 场景 | 模型 | 提供商 | 说明 |
 |---|---|---|---|
-| 主对话 | `deepseek-chat` | DeepSeek API | 高质量文本生成 |
-| 视觉识图 | `qwen3-vl:8b` | Ollama | 图片理解、OCR |
-| 标题生成 | `llama3.1:8b` | Ollama | 新会话自动摘要 |
+| 主对话 | `llama3.1:8b` | Ollama 本地 | 文本生成与对话 |
+| 视觉识图 | `qwen3-vl:8b` | Ollama 本地 | 图片理解、OCR |
+| 标题生成/质量评估 | `llama3.1:8b` | Ollama 本地 | 自动摘要与回复质量检测 |
+
+### 切换到 DeepSeek API
+
+项目已预留 DeepSeek API 接入接口，未来用户规模增长后可切换以获得更好的并发与响应速度：
+
+1. 设置环境变量 `DEEPSEEK_API_KEY=your_key`
+2. 编辑 `server/services/chatService.js`，将 `sendTextMessage` 函数中的 `ollama` 改为 `deepseek`，`OLLAMA_TEXT_MODEL` 改为 `DEEPSEEK_MODEL`，并恢复 `import { deepseek, ollama }` 导入
+
+模型名称和 API 地址在 `server/config.js` 中统一配置。
 
 ## 快速开始
 
@@ -34,8 +45,8 @@
 # 安装依赖
 npm install
 
-# 配置环境变量
-echo "DEEPSEEK_API_KEY=sk-xxx" > .env
+# （可选）如需使用 DeepSeek API 替代本地模型
+# echo "DEEPSEEK_API_KEY=sk-xxx" > .env
 
 # 启动开发服务（前端 + 后端）
 npm run dev
@@ -43,13 +54,16 @@ npm run dev
 
 前端 `http://localhost:5173`，后端 `http://localhost:3001`。
 
+> 默认使用 Ollama 本地模型，无需配置 API Key。确保 Ollama 服务已启动并部署了 `llama3.1:8b` 和 `qwen3-vl:8b` 两个模型。
+
 ## 环境变量
 
 ```env
+# 可选：仅在使用 DeepSeek API 时需要
 DEEPSEEK_API_KEY=your_deepseek_api_key
 ```
 
-视觉识图和标题生成依赖 Ollama 服务，地址及模型名在 `server/config.js` 中配置。
+Ollama 服务地址及所有模型名称在 `server/config.js` 中配置。
 
 ## 备注
 

@@ -92,6 +92,18 @@
       </div>
     </div>
   </div>
+
+  <!-- 图片预览 -->
+  <a-modal
+    :open="!!previewImage"
+    :footer="null"
+    :title="null"
+    width="auto"
+    centered
+    @cancel="previewImage = ''"
+  >
+    <img :src="previewImage" style="max-width: 80vw; max-height: 80vh; display: block" />
+  </a-modal>
 </template>
 
 <script setup>

@@ -12,6 +12,7 @@ export const UPLOADS_DIR = path.join(__dirname, 'uploads')
 export const DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
 export const OLLAMA_BASE_URL = 'http://162.105.154.176:11434/v1'
 export const DEEPSEEK_MODEL = 'deepseek-chat'
+export const OLLAMA_TEXT_MODEL = 'llama3.1:8b'
 export const VISION_MODEL = 'qwen3-vl:8b'
 export const TITLE_MODEL = 'llama3.1:8b'
 

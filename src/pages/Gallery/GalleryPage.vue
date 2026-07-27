@@ -247,7 +247,7 @@
             <div class="detail-answer markdown-body" v-html="renderMd(detailCase.aiAnswer)"></div>
           </div>
           <a-button
-            v-if="detailCase.aiAnswer && detailCase.aiAnswer.length > 200"
+            v-if="detailCase.aiAnswer && detailCase.aiAnswer.length > 100"
             type="link" size="small" class="collapse-btn"
             @click="detailAnswerCollapsed = !detailAnswerCollapsed"
           >
@@ -300,7 +300,7 @@
 import { reactive, ref, onMounted, onActivated, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { PlusOutlined, LikeOutlined, CommentOutlined, DownOutlined, UpOutlined, PictureOutlined, InboxOutlined } from '@ant-design/icons-vue'
+import { PlusOutlined, LikeOutlined, CommentOutlined, DownOutlined, UpOutlined, PictureOutlined } from '@ant-design/icons-vue'
 import ConversationSidebar from '../../components/common/ConversationSidebar.vue'
 import { getCases, likeCase, getComments, addComment, submitCase, parseLink, uploadImage } from '../../api/submission'
 import { marked } from 'marked'
@@ -400,7 +400,25 @@ const form = reactive({
 })
 
 const isFromChat = ref(false)
-watch(showSubmitModal, (val) => { if (!val) isFromChat.value = false })
+
+function resetForm() {
+  Object.assign(form, {
+    prompt: '', platform: undefined, category: undefined,
+    aiAnswer: '', satisfaction: 0, isGoodCase: false,
+    note: '', tags: [], shareLink: '', images: [],
+  })
+  linkUrl.value = ''
+  parsedFiles.value = []
+  uploadFileList.value = []
+  formRef.value?.resetFields()
+}
+
+watch(showSubmitModal, (val) => {
+  if (!val) {
+    isFromChat.value = false
+    resetForm()
+  }
+})
 const parsedFiles = ref([])
 
 async function onParseLink() {
@@ -489,14 +507,7 @@ async function onSubmit() {
     })
     message.success('案例提交成功！')
     showSubmitModal.value = false
-    Object.assign(form, {
-      prompt: '', platform: undefined, category: undefined,
-      aiAnswer: '', satisfaction: 0, isGoodCase: false,
-      note: '', tags: [], shareLink: '', images: [],
-    })
-    linkUrl.value = ''
-    parsedFiles.value = []
-    uploadFileList.value = []
+    resetForm()
     loadCases()
   } catch (err) {
     const msg = err.response?.data?.message || '提交失败，请重试'
