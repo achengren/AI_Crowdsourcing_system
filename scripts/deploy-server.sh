@@ -14,7 +14,7 @@ fi
 git fetch origin "$BRANCH"
 git checkout "$BRANCH"
 git pull --ff-only origin "$BRANCH"
-npm ci
+npm ci --registry=https://registry.npmjs.org --replace-registry-host=never
 npm run test
 npm run build
 pm2 startOrReload ecosystem.config.cjs --env production
