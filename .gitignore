@@ -5,6 +5,7 @@ dist
 server/data.db
 server/data.db-*
 *.log
+.deployment/
 
 server/uploads/*
 !server/uploads/.gitkeep

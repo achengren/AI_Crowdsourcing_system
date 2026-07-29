@@ -9,6 +9,8 @@
     "start": "node server/index.js",
     "db:provision": "node scripts/provision-mysql.js",
     "db:import-sqlite": "node scripts/migrate-sqlite-to-mysql.js",
+    "db:export": "node scripts/export-mysql-data.js",
+    "db:import": "node scripts/import-mysql-data.js",
     "test": "node --test tests/*.test.js",
     "build": "vite build",
     "preview": "vite preview"
