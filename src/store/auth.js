@@ -5,16 +5,11 @@ function loadUser() {
 }
 
 export const useAuthStore = defineStore('auth', {
-  state: () => ({
-    user: loadUser(),
-    token: localStorage.getItem('token') || null,
-  }),
-
+  state: () => ({ user: loadUser(), token: localStorage.getItem('token') || null }),
   getters: {
-    isLoggedIn: (state) => !!state.token,
-    isGuest: (state) => state.user?.role === 'guest',
+    isLoggedIn: state => Boolean(state.token),
+    isAdmin: state => state.user?.role === 'admin',
   },
-
   actions: {
     login(token, user) {
       localStorage.setItem('token', token)
@@ -22,13 +17,10 @@ export const useAuthStore = defineStore('auth', {
       this.token = token
       this.user = user
     },
-
-    loginAsGuest() {
-      localStorage.setItem('token', 'guest')
-      this.token = 'guest'
-      this.user = { id: 'guest', name: '游客', role: 'guest' }
+    updateUser(patch) {
+      this.user = { ...this.user, ...patch }
+      localStorage.setItem('user', JSON.stringify(this.user))
     },
-
     logout() {
       localStorage.removeItem('token')
       localStorage.removeItem('user')

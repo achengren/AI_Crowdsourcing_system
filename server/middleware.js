@@ -1,52 +1,37 @@
 import jwt from 'jsonwebtoken'
 import multer from 'multer'
-import path from 'node:path'
-import { JWT_SECRET, UPLOADS_DIR, UPLOAD_MAX_SIZE, ALLOWED_MIME_TYPES } from './config.js'
-import { genId } from './db.js'
-
-const storage = multer.diskStorage({
-  destination: UPLOADS_DIR,
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname) || '.png'
-    cb(null, `${genId()}${ext}`)
-  },
-})
+import { JWT_SECRET, UPLOAD_MAX_SIZE, ALLOWED_MIME_TYPES } from './config.js'
+import { one } from './db.js'
 
 export const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: UPLOAD_MAX_SIZE },
-  fileFilter: (_req, file, cb) => {
-    cb(null, ALLOWED_MIME_TYPES.includes(file.mimetype))
-  },
+  fileFilter: (_req, file, cb) => cb(null, ALLOWED_MIME_TYPES.includes(file.mimetype)),
 })
 
-export function authMiddleware(req, res, next) {
-  if (req.headers.authorization === 'Bearer guest') {
-    req.user = { id: 'guest', name: '游客', role: 'guest' }
-    return next()
-  }
+export const memoryUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+})
+
+export async function authMiddleware(req, res, next) {
   try {
     const token = req.headers.authorization?.split(' ')[1]
     if (!token) return res.status(401).json({ message: '请先登录' })
-    req.user = jwt.verify(token, JWT_SECRET)
+    const payload = jwt.verify(token, JWT_SECRET)
+    const user = await one(
+      'SELECT id, student_id AS studentId, name, role, status, class_name AS className FROM users WHERE id = ?',
+      [payload.id]
+    )
+    if (!user || user.status !== 'active') return res.status(401).json({ message: '账号不存在或已停用' })
+    req.user = user
     next()
   } catch {
     res.status(401).json({ message: '登录已过期，请重新登录' })
   }
 }
 
-export function optionalAuth(req, res, next) {
-  if (req.headers.authorization === 'Bearer guest') {
-    req.user = { id: 'guest', name: '游客', role: 'guest' }
-    return next()
-  }
-  try {
-    const token = req.headers.authorization?.split(' ')[1]
-    if (token) {
-      req.user = jwt.verify(token, JWT_SECRET)
-    }
-  } catch {
-    // token 无效，以匿名身份继续
-  }
+export function requireAdmin(req, res, next) {
+  if (req.user?.role !== 'admin') return res.status(403).json({ message: '仅管理员可执行此操作' })
   next()
 }

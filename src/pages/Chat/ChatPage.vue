@@ -3,6 +3,9 @@
     <ConversationSidebar />
 
     <div class="chat-main">
+      <header class="workspace-header">
+        <div><span>AI CONVERSATION</span><h1>AI 对话</h1></div>
+      </header>
       <div class="message-list" ref="messageList">
         <div v-if="!messages.length && !sending" class="welcome">
           <h2>有什么可以帮助你的？</h2>
@@ -10,7 +13,7 @@
 
         <div
           v-for="(msg, i) in messages"
-          :key="i"
+          :key="msg.id || i"
           :class="['message', msg.role === 'user' ? 'message-user' : 'message-ai']"
         >
           <div class="message-body">
@@ -20,13 +23,14 @@
             </div>
             <div class="message-text markdown-body" v-else v-html="renderMd(msg.content)"></div>
             <div class="message-actions" v-if="msg.role === 'ai'">
+              <a-tag v-if="msg.model" color="default">{{ msg.model }}</a-tag>
               <a-rate v-model:value="msg.rating" :count="5" size="small" @change="onRate(msg, $event)" />
               <template v-if="msg.qualityFlag && msg.qualityFlag.isLowQuality">
                 <a-tag color="warning" class="quality-tag">
                   <ExclamationCircleOutlined /> 可能存在信息缺失
                 </a-tag>
                 <a-button size="small" type="primary" ghost @click="onSubmitCase(msg, i)">
-                  <UploadOutlined /> 提交为案例
+                  <UploadOutlined /> 标注并提交
                 </a-button>
                 <a-popover title="改进建议" trigger="click" placement="bottomLeft">
                   <template #content>
@@ -42,7 +46,7 @@
                 </a-popover>
               </template>
               <template v-else>
-                <a-button size="small" type="link" @click="onSubmitCase(msg, i)">提交为案例</a-button>
+                <a-button size="small" type="link" @click="onSubmitCase(msg, i)">标注并提交</a-button>
               </template>
             </div>
           </div>
@@ -50,7 +54,7 @@
 
         <div v-if="sending" class="message message-ai">
           <div class="message-body">
-            <a-spin size="small" /> 思考中...
+            <a-spin size="small" /> {{ requestStage === 'vision' ? '正在读取图片…' : '正在生成回答…' }}
           </div>
         </div>
       </div>
@@ -123,6 +127,8 @@ const router = useRouter()
 const route = useRoute()
 const input = ref('')
 const sending = ref(false)
+const requestStage = ref('answer')
+let stageTimer = null
 const uploading = ref(false)
 const imageUrl = ref('')
 const previewImage = ref('')
@@ -151,6 +157,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('new-chat', onNewChat)
+  if (stageTimer) clearTimeout(stageTimer)
 })
 
 watch(() => route.query.conv, async (convId) => {
@@ -164,11 +171,15 @@ async function loadConversation(convId) {
     messages.value = res.data.map(m => {
       const parsed = parseMsgContent(m.content)
       return {
+        id: m.id,
         role: m.role === 'assistant' ? 'ai' : 'user',
         content: parsed.text,
         imageUrl: parsed.imageUrl,
         rating: 0,
         qualityFlag: m.qualityFlag || null,
+        provider: m.provider,
+        model: m.model,
+        modality: m.modality,
       }
     })
   } catch {
@@ -200,19 +211,33 @@ async function onSend() {
   input.value = ''
   imageUrl.value = ''
   sending.value = true
+  requestStage.value = img ? 'vision' : 'answer'
+  if (stageTimer) clearTimeout(stageTimer)
+  if (img) stageTimer = setTimeout(() => { requestStage.value = 'answer' }, 2500)
   await scrollToBottom()
 
   try {
     const res = await sendMessage({ prompt: text, conversationId: activeConvId.value, imageUrl: img })
-    messages.value.push({ role: 'ai', content: res.data.reply, rating: 0, qualityFlag: res.data.qualityFlag || null })
+    messages.value.push({
+      id: res.data.messageId,
+      role: 'ai',
+      content: res.data.reply,
+      rating: 0,
+      provider: res.data.provider,
+      model: res.data.model,
+      modality: res.data.modality,
+    })
 
     if (!activeConvId.value) {
       activeConvId.value = res.data.conversationId
       router.replace({ query: { conv: res.data.conversationId } })
     }
-  } catch {
-    messages.value.push({ role: 'ai', content: '请求失败，请重试', rating: 0 })
+  } catch (error) {
+    const stage = error.response?.data?.stage
+    messages.value.push({ role: 'ai', content: stage === 'vision' ? '图片识别失败，请重试' : '回答生成失败，请重试', rating: 0 })
   } finally {
+    if (stageTimer) clearTimeout(stageTimer)
+    stageTimer = null
     sending.value = false
     await scrollToBottom()
   }
@@ -258,7 +283,9 @@ function onSubmitCase(aiMsg, aiIndex) {
       break
     }
   }
-  const query = { submit: '1', prompt: userContent, aiAnswer: aiMsg.content }
+  const query = aiMsg.id
+    ? { submit: '1', messageId: aiMsg.id, satisfaction: aiMsg.rating || 0 }
+    : { submit: '1', prompt: userContent, aiAnswer: aiMsg.content, satisfaction: aiMsg.rating || 0 }
   if (userImageUrl) query.imageUrl = userImageUrl
   router.push({ path: '/gallery', query })
 }
@@ -299,7 +326,7 @@ async function scrollToBottom() {
 .chat-page {
   display: flex;
   height: 100vh;
-  background: #fff;
+  background: var(--hib-paper);
 }
 
 .chat-main {
@@ -307,8 +334,12 @@ async function scrollToBottom() {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: #fff;
+  background: var(--hib-paper);
 }
+
+.workspace-header { min-height: 92px; display: flex; align-items: end; padding: 24px 34px 18px; border-bottom: 1px solid var(--hib-line); background: rgba(255,255,255,.55); }
+.workspace-header span { color: var(--hib-red); font-size: 11px; }
+.workspace-header h1 { margin: 5px 0 0; font-size: 25px; line-height: 1.2; }
 
 .welcome {
   text-align: center;
@@ -354,14 +385,15 @@ async function scrollToBottom() {
 }
 
 .message-user .message-text {
-  background: rgba(82, 196, 26, 0.15);
-  color: #333;
+  background: var(--hib-red-soft);
+  color: var(--hib-text);
   white-space: pre-wrap;
 }
 
 .message-ai .message-text {
-  background: #f3f4f6;
-  color: #111;
+  background: var(--hib-surface);
+  color: var(--hib-text);
+  border: 1px solid var(--hib-line);
   line-height: 1.5;
 }
 
@@ -388,15 +420,17 @@ async function scrollToBottom() {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  border: 1px solid #d1d5db;
-  border-radius: 12px;
+  border: 1px solid var(--hib-line);
+  border-radius: 7px;
   padding: 8px 16px;
+  background: #fff;
+  box-shadow: 0 5px 18px rgba(55, 39, 42, .05);
   transition: border-color 0.2s;
 }
 
 .chat-input-inner:focus-within {
-  border-color: #1677ff;
-  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.1);
+  border-color: var(--hib-red);
+  box-shadow: 0 0 0 3px rgba(173, 70, 82, 0.1), 0 7px 20px rgba(55, 39, 42, .06);
 }
 
 .chat-input-inner :deep(.ant-input) {
@@ -445,7 +479,7 @@ async function scrollToBottom() {
 }
 .markdown-body :deep(strong) { font-weight: 600; }
 .markdown-body :deep(blockquote) {
-  border-left: 3px solid #1677ff;
+  border-left: 3px solid var(--hib-red);
   padding-left: 12px;
   margin: 0.5em 0;
   color: #666;
@@ -466,7 +500,7 @@ async function scrollToBottom() {
   height: auto;
 }
 
-.img-btn:hover { color: #1677ff; }
+.img-btn:hover { color: var(--hib-red); }
 
 .image-preview-bar {
   display: flex;
@@ -509,6 +543,16 @@ async function scrollToBottom() {
   margin-bottom: 6px;
   display: block;
   border: 1px solid #e5e7eb;
+}
+
+@media (max-width: 760px) {
+  .chat-main { padding-top: 56px; }
+  .workspace-header { min-height: 74px; padding: 16px 14px 14px; }
+  .workspace-header h1 { font-size: 21px; }
+  .message-list { padding-top: 16px; }
+  .message { padding: 0 14px; }
+  .chat-input-area { padding: 10px 12px 14px; }
+  .chat-input-inner { padding-inline: 12px; }
 }
 </style>
 

@@ -1,63 +1,53 @@
 import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
-import { getDb, genId, saveDb } from '../db.js'
+import { z } from 'zod'
+import { one, query } from '../db.js'
 import { JWT_SECRET } from '../config.js'
+import { authMiddleware } from '../middleware.js'
 
 const router = Router()
+const loginSchema = z.object({ studentId: z.string().trim().min(1), password: z.string().min(1) })
 
-router.post('/register', (req, res) => {
-  const { studentId, name, password } = req.body
-  if (!studentId || !name || !password) {
-    return res.status(400).json({ message: '学号、姓名和密码不能为空' })
+router.post('/login', async (req, res) => {
+  const parsed = loginSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ message: '账号和密码不能为空' })
+
+  const row = await one(
+    'SELECT id, student_id AS studentId, name, role, status, class_name AS className, password_hash AS passwordHash FROM users WHERE student_id = ?',
+    [parsed.data.studentId]
+  )
+  if (!row || !bcrypt.compareSync(parsed.data.password, row.passwordHash)) {
+    return res.status(400).json({ message: '账号或密码错误' })
   }
-  if (password.length < 6) {
-    return res.status(400).json({ message: '密码至少6位' })
+  if (row.status !== 'active') return res.status(403).json({ message: '账号已停用，请联系管理员' })
+
+  await query('UPDATE users SET last_login_at = CURRENT_TIMESTAMP(3) WHERE id = ?', [row.id])
+  const user = {
+    id: row.id,
+    studentId: row.studentId,
+    name: row.name,
+    role: row.role,
+    className: row.className,
   }
-
-  const existing = getDb().exec('SELECT 1 FROM users WHERE student_id = ?', [studentId])
-  if (existing[0] && existing[0].values.length) {
-    return res.status(400).json({ message: '该学号已注册' })
-  }
-
-  const id = genId()
-  const hash = bcrypt.hashSync(password, 10)
-  getDb().run('INSERT INTO users (id, student_id, name, password_hash) VALUES (?, ?, ?, ?)', [id, studentId, name, hash])
-  saveDb()
-
-  const user = { id, studentId, name, role: 'student' }
-  const token = jwt.sign({ id: user.id, studentId: user.studentId, name: user.name, role: user.role }, JWT_SECRET, { expiresIn: '7d' })
+  const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: '8h' })
   res.json({ code: 0, data: { token, user } })
 })
 
-router.post('/login', (req, res) => {
-  const { studentId, password } = req.body
-  if (!studentId || !password) {
-    return res.status(400).json({ message: '学号和密码不能为空' })
+router.get('/me', authMiddleware, (req, res) => res.json({ code: 0, data: req.user }))
+
+router.post('/change-password', authMiddleware, async (req, res) => {
+  const schema = z.object({ currentPassword: z.string().min(1), newPassword: z.string().min(8) })
+  const parsed = schema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ message: '新密码至少 8 位' })
+  const row = await one('SELECT password_hash AS passwordHash FROM users WHERE id = ?', [req.user.id])
+  if (!bcrypt.compareSync(parsed.data.currentPassword, row.passwordHash)) {
+    return res.status(400).json({ message: '当前密码错误' })
   }
-
-  const rows = getDb().exec('SELECT id, student_id, name, role, password_hash FROM users WHERE student_id = ?', [studentId])
-  if (!rows[0] || !rows[0].values.length) {
-    return res.status(400).json({ message: '学号未注册' })
-  }
-
-  const row = rows[0].values[0]
-  const hash = row[4]
-
-  if (!hash) {
-    return res.status(400).json({ message: '该账号未设置密码，请联系管理员重置' })
-  }
-  if (bcrypt.compareSync(password, hash)) {
-    const user = { id: row[0], studentId: row[1], name: row[2], role: row[3] }
-    const token = jwt.sign({ id: user.id, studentId: user.studentId, name: user.name, role: user.role }, JWT_SECRET, { expiresIn: '7d' })
-    return res.json({ code: 0, data: { token, user } })
-  }
-
-  res.status(400).json({ message: '密码错误' })
-})
-
-router.post('/logout', (req, res) => {
+  await query('UPDATE users SET password_hash = ? WHERE id = ?', [bcrypt.hashSync(parsed.data.newPassword, 12), req.user.id])
   res.json({ code: 0, data: null })
 })
+
+router.post('/logout', (_req, res) => res.json({ code: 0, data: null }))
 
 export default router

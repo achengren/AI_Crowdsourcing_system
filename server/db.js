@@ -1,33 +1,13 @@
-import fs from 'node:fs'
 import crypto from 'node:crypto'
-import initSqlJs from 'sql.js'
-import { DB_PATH } from './config.js'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import mysql from 'mysql2/promise'
+import bcrypt from 'bcryptjs'
+import { ADMIN_BOOTSTRAP, DB_CONFIG } from './config.js'
 
-let db
-
-let saveTimer = null
-
-export function getDb() {
-  return db
-}
-
-export function saveDb() {
-  clearTimeout(saveTimer)
-  saveTimer = setTimeout(() => {
-    fs.writeFile(DB_PATH, Buffer.from(db.export()), (err) => {
-      if (err) console.error('数据库保存失败:', err)
-    })
-  }, 200)
-}
-
-export function saveDbNow() {
-  clearTimeout(saveTimer)
-  try {
-    fs.writeFileSync(DB_PATH, Buffer.from(db.export()))
-  } catch (err) {
-    console.error('数据库同步保存失败:', err)
-  }
-}
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+let pool
 
 export function genId() {
   return crypto.randomBytes(16).toString('hex')
@@ -39,98 +19,85 @@ export function getWeekRange() {
   const monday = new Date(now)
   monday.setDate(now.getDate() - (day === 0 ? 6 : day - 1))
   monday.setHours(0, 0, 0, 0)
-  return monday.toISOString()
+  return monday
+}
+
+export async function query(sql, params = []) {
+  const [rows] = await pool.query(sql, params)
+  return rows
+}
+
+export async function one(sql, params = []) {
+  const rows = await query(sql, params)
+  return rows[0] || null
+}
+
+export async function transaction(work) {
+  const connection = await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+    const result = await work(connection)
+    await connection.commit()
+    return result
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
+}
+
+async function runMigrations() {
+  await query(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    name VARCHAR(255) PRIMARY KEY,
+    applied_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+  const migrationDir = path.join(__dirname, 'migrations')
+  const files = (await fs.readdir(migrationDir)).filter(name => name.endsWith('.sql')).sort()
+  const applied = new Set((await query('SELECT name FROM schema_migrations')).map(row => row.name))
+
+  for (const file of files) {
+    if (applied.has(file)) continue
+    const sql = await fs.readFile(path.join(migrationDir, file), 'utf8')
+    await transaction(async connection => {
+      await connection.query(sql)
+      await connection.execute('INSERT INTO schema_migrations (name) VALUES (?)', [file])
+    })
+    console.log(`数据库迁移完成: ${file}`)
+  }
+}
+
+async function ensureBootstrapAdmin() {
+  const existing = await one("SELECT id FROM users WHERE role = 'admin' LIMIT 1")
+  if (existing || !ADMIN_BOOTSTRAP.studentId || !ADMIN_BOOTSTRAP.password) return
+
+  await query(
+    `INSERT INTO users (id, student_id, name, password_hash, role, status, must_change_password)
+     VALUES (?, ?, ?, ?, 'admin', 'active', 0)`,
+    [genId(), ADMIN_BOOTSTRAP.studentId, ADMIN_BOOTSTRAP.name, bcrypt.hashSync(ADMIN_BOOTSTRAP.password, 12)]
+  )
+  console.log(`已创建初始管理员: ${ADMIN_BOOTSTRAP.studentId}`)
 }
 
 export async function initDb() {
-  const SQL = await initSqlJs()
-
-  if (fs.existsSync(DB_PATH)) {
-    const buffer = fs.readFileSync(DB_PATH)
-    db = new SQL.Database(buffer)
-    try { db.run("ALTER TABLE users ADD COLUMN password_hash TEXT") } catch {}
-    try { db.run("ALTER TABLE submissions ADD COLUMN images TEXT DEFAULT '[]'") } catch {}
-    try { db.run("CREATE TABLE conversations (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT DEFAULT '新对话', created_at TEXT DEFAULT (datetime('now')))") } catch {}
-    try { db.run("CREATE TABLE messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')))") } catch {}
-    try { db.run("ALTER TABLE messages ADD COLUMN quality_flag TEXT DEFAULT ''") } catch {}
-    return
-  }
-
-  db = new SQL.Database()
-
-  db.run(`
-    CREATE TABLE users (
-      id TEXT PRIMARY KEY,
-      student_id TEXT UNIQUE NOT NULL,
-      name TEXT NOT NULL,
-      password_hash TEXT NOT NULL,
-      role TEXT DEFAULT 'student',
-      created_at TEXT DEFAULT (datetime('now'))
-    )
-  `)
-
-  db.run(`
-    CREATE TABLE submissions (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      author TEXT,
-      prompt TEXT NOT NULL,
-      platform TEXT NOT NULL,
-      category TEXT NOT NULL,
-      ai_answer TEXT DEFAULT '',
-      share_link TEXT DEFAULT '',
-      satisfaction INTEGER DEFAULT 0,
-      is_good_case INTEGER DEFAULT 0,
-      note TEXT DEFAULT '',
-      tags TEXT DEFAULT '[]',
-      images TEXT DEFAULT '[]',
-      like_count INTEGER DEFAULT 0,
-      comment_count INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY (user_id) REFERENCES users(id)
-    )
-  `)
-
-  db.run(`
-    CREATE TABLE likes (
-      case_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      PRIMARY KEY (case_id, user_id)
-    )
-  `)
-
-  db.run(`
-    CREATE TABLE comments (
-      id TEXT PRIMARY KEY,
-      case_id TEXT NOT NULL,
-      author TEXT,
-      content TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY (case_id) REFERENCES submissions(id)
-    )
-  `)
-
-  db.run(`
-    CREATE TABLE conversations (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      title TEXT DEFAULT '新对话',
-      created_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY (user_id) REFERENCES users(id)
-    )
-  `)
-
-  db.run(`
-    CREATE TABLE messages (
-      id TEXT PRIMARY KEY,
-      conversation_id TEXT NOT NULL,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL,
-      quality_flag TEXT DEFAULT '',
-      created_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-    )
-  `)
-
-  saveDb()
+  pool = mysql.createPool({
+    ...DB_CONFIG,
+    waitForConnections: true,
+    queueLimit: 100,
+    charset: 'utf8mb4',
+    timezone: '+08:00',
+    multipleStatements: true,
+  })
+  await query('SELECT 1')
+  await runMigrations()
+  await ensureBootstrapAdmin()
 }
+
+export async function closeDb() {
+  if (pool) await pool.end()
+}
+
+// Compatibility no-ops while callers are migrated away from sql.js.
+export function saveDb() {}
+export async function saveDbNow() { await closeDb() }

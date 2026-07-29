@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { authMiddleware } from '../middleware.js'
 import { ALLOWED_LINK_HOSTS } from '../config.js'
-import { parseLink } from '../linkParser.js'
+import { detectPlatform, parseLink } from '../linkParser.js'
 
 const router = Router()
 
@@ -31,7 +31,17 @@ router.post('/', authMiddleware, async (req, res) => {
     res.json({ code: 0, data: result })
   } catch (err) {
     console.error('链接解析失败:', err.message)
-    res.status(400).json({ message: err.message || '解析失败，请手动填写内容' })
+    res.json({
+      code: 0,
+      data: {
+        platform: detectPlatform(url),
+        prompt: '',
+        aiAnswer: '',
+        files: [],
+        manualRequired: true,
+        warning: `${err.message || '无法自动读取分享内容'}，已保留链接，请手动补充对话内容。`,
+      },
+    })
   }
 })
 

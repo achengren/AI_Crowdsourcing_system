@@ -1,447 +1,291 @@
 <template>
   <div class="profile-page">
     <ConversationSidebar />
-
-    <div class="main">
-      <a-card :bordered="false" class="profile-header">
-        <a-row align="middle" :gutter="24">
-          <a-col>
-            <a-avatar :size="72">{{ auth.user?.name?.[0] || 'U' }}</a-avatar>
-          </a-col>
-          <a-col :flex="1">
-            <h2>{{ auth.user?.name || '用户' }}</h2>
-            <a-space>
-              <a-tag v-if="auth.isGuest" color="orange">游客模式</a-tag>
-              <a-tag v-else color="blue">{{ auth.user?.studentId }}</a-tag>
-            </a-space>
-          </a-col>
-        </a-row>
-      </a-card>
-
-      <a-row :gutter="16" style="margin-top: 16px">
-        <a-col :span="6" v-for="stat in stats" :key="stat.label">
-          <a-card :bordered="false">
-            <a-statistic :title="stat.label" :value="stat.value" :suffix="stat.suffix" />
-          </a-card>
-        </a-col>
-      </a-row>
-
-      <a-card title="我的提交记录" :bordered="false" style="margin-top: 16px">
-        <div class="card-grid" v-if="submissions.length">
-          <div
-            v-for="item in submissions"
-            :key="item.id"
-            class="case-card"
-          >
-            <div class="case-card-top">
-              <a-tag :color="categoryColor(item.category)">{{ categoryLabel(item.category) }}</a-tag>
-              <a-tag>{{ item.platform }}</a-tag>
-              <span v-if="item.images?.length" class="card-img-badge"><PictureOutlined /> {{ item.images.length }}</span>
-            </div>
-
-            <div class="case-prompt" @click="openDetail(item)">{{ item.prompt }}</div>
-
-            <div class="case-answer" v-if="item.aiAnswer" @click="openDetail(item)">
-              {{ item.aiAnswer.slice(0, 120) }}{{ item.aiAnswer.length > 120 ? '...' : '' }}
-            </div>
-
-            <div class="case-tags" v-if="item.tags?.length">
-              <a-tag v-for="tag in item.tags" :key="tag" size="small">{{ tag }}</a-tag>
-            </div>
-
-            <div class="case-card-footer">
-              <span class="case-date">{{ item.createdAt }}</span>
-              <a-space>
-                <a-rate :value="item.satisfaction" :count="5" disabled style="font-size: 12px" />
-                <a-button type="link" danger size="small" @click.stop="onDelete(item)">删除</a-button>
-              </a-space>
-            </div>
-          </div>
-        </div>
-        <a-empty v-if="!loading && submissions.length === 0" description="暂无提交记录" />
-      </a-card>
-    </div>
-
-    <!-- 案例详情弹窗 -->
-    <a-modal
-      v-model:open="detailVisible"
-      title="案例详情"
-      width="760px"
-      :footer="null"
-      @cancel="detailVisible = false"
-    >
-      <div v-if="detailCase">
-        <div style="margin-bottom: 12px">
-          <a-tag :color="categoryColor(detailCase.category)">{{ categoryLabel(detailCase.category) }}</a-tag>
-          <a-tag>{{ detailCase.platform }}</a-tag>
-          <span style="color: #999; margin-left: 8px">{{ detailCase.createdAt }}</span>
-        </div>
-        <div class="detail-section">
-          <div class="detail-section-title">Prompt</div>
+    <main class="main">
+      <header class="profile-header">
+        <div class="identity">
+          <a-avatar :size="56">{{ auth.user?.name?.[0] || 'U' }}</a-avatar>
           <div>
-            <template v-if="detailPromptCollapsed && detailCase.prompt && detailCase.prompt.length > 100">
-              {{ detailCase.prompt.slice(0, 100) }}...
-              <a-button type="link" size="small" class="collapse-btn" @click="detailPromptCollapsed = false">
-                <DownOutlined />
-              </a-button>
-            </template>
-            <template v-else>
-              {{ detailCase.prompt }}
-              <a-button
-                v-if="detailCase.prompt && detailCase.prompt.length > 100"
-                type="link" size="small" class="collapse-btn"
-                @click="detailPromptCollapsed = true"
-              >
-                <UpOutlined />
-              </a-button>
-            </template>
+            <h1>{{ auth.user?.name || '用户' }}</h1>
+            <div class="identity-meta">
+              <span>{{ auth.user?.studentId }}</span>
+              <span v-if="auth.user?.className">{{ auth.user.className }}</span>
+              <a-tag v-if="auth.isAdmin" color="green">管理员</a-tag>
+            </div>
           </div>
         </div>
+        <a-button @click="passwordVisible = true"><LockOutlined /> 修改密码</a-button>
+      </header>
 
-        <div class="detail-section">
-          <div class="detail-section-title">AI 回复</div>
-          <div :class="{ collapsed: detailAnswerCollapsed }">
-            <div class="detail-answer markdown-body" v-html="renderMd(detailCase.aiAnswer)"></div>
-          </div>
-          <a-button
-            v-if="detailCase.aiAnswer && detailCase.aiAnswer.length > 100"
-            type="link" size="small" class="collapse-btn"
-            @click="detailAnswerCollapsed = !detailAnswerCollapsed"
-          >
-            {{ detailAnswerCollapsed ? '展开全部' : '收起' }}
-          </a-button>
+      <section class="stat-strip">
+        <div v-for="stat in stats" :key="stat.label" class="stat-item">
+          <span>{{ stat.label }}</span>
+          <strong>{{ stat.value }}</strong>
+          <small>{{ stat.suffix }}</small>
         </div>
-        <div class="detail-section" v-if="detailCase.images?.length">
-          <div class="detail-section-title">相关截图</div>
-          <div class="detail-images">
-            <img
-              v-for="(url, idx) in detailCase.images"
-              :key="idx"
-              :src="url"
-              class="detail-img"
-              @click="onPreviewImage(detailCase.images, idx)"
-            />
-          </div>
-        </div>
-        <a-divider>评论</a-divider>
-        <a-list :data-source="detailComments" size="small" v-if="detailComments.length">
-          <template #renderItem="{ item: c }">
-            <a-list-item>
-              <a-list-item-meta :title="c.author" :description="c.content" />
-            </a-list-item>
-          </template>
-        </a-list>
-        <a-empty v-else description="暂无评论" />
-        <div style="display: flex; gap: 8px; margin-top: 12px">
-          <a-textarea v-model:value="detailCommentText" :rows="2" placeholder="写评论..." style="flex:1" />
-          <a-button type="primary" @click="onSendDetailComment" style="align-self: flex-end">发送</a-button>
-        </div>
+      </section>
+
+      <a-tabs v-model:activeKey="activeTab" class="workspace-tabs">
+        <a-tab-pane key="diaries" tab="信息需求日记">
+          <section class="section-toolbar">
+            <div>
+              <h2>每日信息行为记录</h2>
+              <p>今日已提交 {{ todaySubmitted }}/3 条</p>
+            </div>
+            <div class="toolbar-actions">
+              <a-progress type="circle" :percent="todayPercent" :size="46" :show-info="false" />
+              <a-button type="primary" @click="openDiary()"><PlusOutlined /> 新建记录</a-button>
+            </div>
+          </section>
+
+          <a-table :data-source="diaries" :columns="diaryColumns" row-key="id" :pagination="{ pageSize: 10 }" :scroll="{ x: 950 }" size="middle">
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'need'">
+                <div class="primary-cell">{{ record.needDescription }}</div>
+                <div class="secondary-cell">{{ record.contextText }}</div>
+              </template>
+              <template v-else-if="column.key === 'genai'">
+                <a-tag :color="record.isGenaiRelated ? 'blue' : 'default'">{{ record.isGenaiRelated ? record.genaiPlatform || 'GenAI' : '非 GenAI' }}</a-tag>
+              </template>
+              <template v-else-if="column.key === 'status'">
+                <a-tag :color="record.status === 'submitted' ? 'green' : 'orange'">{{ record.status === 'submitted' ? '已提交' : '草稿' }}</a-tag>
+              </template>
+              <template v-else-if="column.key === 'actions'">
+                <a-space>
+                  <a-button type="link" size="small" @click="openDiary(record)">编辑</a-button>
+                  <a-button v-if="record.isGenaiRelated" type="link" size="small" @click="convertDiary(record)">转为案例</a-button>
+                  <a-popconfirm title="确定删除这条记录？" @confirm="removeDiary(record.id)">
+                    <a-button type="link" danger size="small">删除</a-button>
+                  </a-popconfirm>
+                </a-space>
+              </template>
+            </template>
+          </a-table>
+        </a-tab-pane>
+
+        <a-tab-pane key="cases" tab="我的案例">
+          <section class="section-toolbar">
+            <div><h2>案例记录</h2><p>提交后的案例由管理员审核发布</p></div>
+          </section>
+          <a-table :data-source="submissions" :columns="caseColumns" row-key="id" :pagination="{ pageSize: 10 }" :scroll="{ x: 900 }" size="middle">
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'prompt'">
+                <div class="primary-cell">{{ record.prompt }}</div>
+                <div class="secondary-cell">{{ record.platform }}<span v-if="record.model"> · {{ record.model }}</span> · 第 {{ record.revisionNumber || 1 }} 版</div>
+              </template>
+              <template v-else-if="column.key === 'category'">{{ categoryLabel(record.category) }}</template>
+              <template v-else-if="column.key === 'status'">
+                <a-tag :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
+                <div v-if="record.status === 'rejected' && record.rejectionReason" class="rejection-text">{{ record.rejectionReason }}</div>
+              </template>
+              <template v-else-if="column.key === 'actions'">
+                <a-space>
+                  <a-button type="link" size="small" @click="openCase(record)">查看</a-button>
+                  <a-button v-if="record.status === 'rejected'" type="link" size="small" @click="reviseCase(record)">修改后重提</a-button>
+                  <a-popconfirm v-if="!record.revisionOfId && !record.hasNewerRevision" title="确定删除该案例？" @confirm="removeCase(record.id)">
+                    <a-button type="link" danger size="small">删除</a-button>
+                  </a-popconfirm>
+                </a-space>
+              </template>
+            </template>
+          </a-table>
+        </a-tab-pane>
+      </a-tabs>
+    </main>
+
+    <a-modal v-model:open="diaryVisible" :title="editingDiaryId ? '编辑信息需求记录' : '新建信息需求记录'" width="760px" :footer="null">
+      <a-form ref="diaryFormRef" :model="diaryForm" layout="vertical">
+        <a-row :gutter="16">
+          <a-col :span="12"><a-form-item label="日期" name="logDate" :rules="[{ required: true }]"><a-date-picker v-model:value="diaryDate" style="width:100%" /></a-form-item></a-col>
+          <a-col :span="12"><a-form-item label="发生时间"><a-time-picker v-model:value="diaryTime" format="HH:mm" style="width:100%" /></a-form-item></a-col>
+        </a-row>
+        <a-form-item label="发生情境" name="contextText" :rules="[{ required: true, message: '请描述发生情境' }]">
+          <a-textarea v-model:value="diaryForm.contextText" :rows="2" placeholder="什么情境触发了这次信息需求？" />
+        </a-form-item>
+        <a-form-item label="信息需求" name="needDescription" :rules="[{ required: true, message: '请描述信息需求' }]">
+          <a-textarea v-model:value="diaryForm.needDescription" :rows="2" />
+        </a-form-item>
+        <a-form-item label="使用的渠道和工具" name="channels" :rules="[{ required: true, message: '请填写渠道' }]">
+          <a-input v-model:value="diaryForm.channels" placeholder="搜索引擎、同学、图书馆、AI 等" />
+        </a-form-item>
+        <a-form-item label="搜寻与获取过程" name="searchProcess" :rules="[{ required: true, message: '请完整记录过程' }]">
+          <a-textarea v-model:value="diaryForm.searchProcess" :rows="3" />
+        </a-form-item>
+        <a-form-item label="获取结果" name="outcome" :rules="[{ required: true, message: '请记录结果' }]">
+          <a-textarea v-model:value="diaryForm.outcome" :rows="3" />
+        </a-form-item>
+        <a-form-item label="反思" name="reflection" :rules="[{ required: true, message: '请填写反思' }]">
+          <a-textarea v-model:value="diaryForm.reflection" :rows="2" placeholder="结果是否满足需求？下次会如何改进？" />
+        </a-form-item>
+        <a-row :gutter="16" align="middle">
+          <a-col :span="8"><a-checkbox v-model:checked="diaryForm.isGenaiRelated">与 GenAI 有关</a-checkbox></a-col>
+          <a-col :span="8"><a-select v-if="diaryForm.isGenaiRelated" v-model:value="diaryForm.genaiPlatform" placeholder="选择平台" style="width:100%"><a-select-option v-for="item in PLATFORM_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</a-select-option></a-select></a-col>
+          <a-col :span="8"><a-segmented v-model:value="diaryForm.status" :options="[{ label: '草稿', value: 'draft' }, { label: '提交', value: 'submitted' }]" /></a-col>
+        </a-row>
+        <div class="modal-actions"><a-button @click="diaryVisible = false">取消</a-button><a-button type="primary" :loading="savingDiary" @click="saveDiary">保存记录</a-button></div>
+      </a-form>
+    </a-modal>
+
+    <a-modal v-model:open="caseVisible" title="案例详情" width="min(960px, 94vw)" :footer="null">
+      <div v-if="selectedCase" class="case-detail">
+        <div class="detail-label">Prompt</div><p>{{ selectedCase.prompt }}</p>
+        <a-alert v-if="selectedCase.status === 'rejected'" type="error" show-icon message="审核退回原因" :description="selectedCase.rejectionReason" />
+        <div class="detail-label">版本</div><p>第 {{ selectedCase.revisionNumber || 1 }} 版</p>
+        <div class="detail-label">AI 回复与批注</div>
+        <AnnotationEditor :text="selectedCase.aiAnswer" :model-value="selectedCase.annotations || []" readonly />
+        <div v-if="selectedCase.note" class="overall-note"><strong>整体说明</strong><p>{{ selectedCase.note }}</p></div>
       </div>
     </a-modal>
 
-    <!-- 图片预览 -->
-    <a-modal
-      :open="previewVisible"
-      :footer="null"
-      :title="null"
-      width="auto"
-      centered
-      @cancel="previewVisible = false"
-    >
-      <img :src="previewSrc" style="max-width: 80vw; max-height: 80vh; display: block" />
+    <a-modal v-model:open="passwordVisible" title="修改密码" :footer="null" width="420px">
+      <a-form layout="vertical" @finish="savePassword">
+        <a-form-item label="当前密码" name="currentPassword" :rules="[{ required: true }]"><a-input-password v-model:value="passwordForm.currentPassword" /></a-form-item>
+        <a-form-item label="新密码" name="newPassword" :rules="[{ required: true, min: 8, message: '至少 8 位' }]"><a-input-password v-model:value="passwordForm.newPassword" /></a-form-item>
+        <a-button type="primary" html-type="submit" block>更新密码</a-button>
+      </a-form>
     </a-modal>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { Modal } from 'ant-design-vue'
-import { PictureOutlined, DownOutlined, UpOutlined } from '@ant-design/icons-vue'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { message } from 'ant-design-vue'
+import { LockOutlined, PlusOutlined } from '@ant-design/icons-vue'
+import dayjs from 'dayjs'
 import ConversationSidebar from '../../components/common/ConversationSidebar.vue'
+import AnnotationEditor from '../../components/cases/AnnotationEditor.vue'
 import { useAuthStore } from '../../store/auth'
-import { getMySubmissions, deleteSubmission, getComments, addComment } from '../../api/submission'
-import { marked } from 'marked'
-import DOMPurify from 'dompurify'
+import { getMySubmissions, deleteSubmission } from '../../api/submission'
+import { getDiaries, createDiary, updateDiary, deleteDiary } from '../../api/diary'
+import { changePassword } from '../../api/auth'
+import { CASE_CATEGORIES, PLATFORM_OPTIONS, optionLabel } from '../../constants/options'
 
 const auth = useAuthStore()
-const loading = ref(false)
+const router = useRouter()
+const activeTab = ref('diaries')
 const submissions = ref([])
+const diaries = ref([])
+const diaryProgress = ref([])
+const stats = reactive([
+  { label: '案例总数', value: 0, suffix: '条' },
+  { label: '本周案例', value: 0, suffix: '条' },
+  { label: '日记总数', value: 0, suffix: '条' },
+  { label: '今日完成', value: 0, suffix: '/3' },
+])
 
-const stats = [
-  { label: '总提交', value: 0, suffix: '条' },
-  { label: '本周提交', value: 0, suffix: '条' },
-  { label: '优质案例', value: 0, suffix: '个' },
-  { label: '平均满意度', value: 0, suffix: '分' },
+const today = dayjs().format('YYYY-MM-DD')
+const todaySubmitted = computed(() => Number(diaryProgress.value.find(item => item.logDate === today)?.submitted || 0))
+const todayPercent = computed(() => Math.min(100, Math.round(todaySubmitted.value / 3 * 100)))
+const diaryColumns = [
+  { title: '日期', dataIndex: 'logDate', width: 110 },
+  { title: '信息需求与情境', key: 'need' },
+  { title: '渠道', dataIndex: 'channels', width: 160 },
+  { title: 'GenAI', key: 'genai', width: 120 },
+  { title: '状态', key: 'status', width: 90 },
+  { title: '操作', key: 'actions', width: 200 },
+]
+const caseColumns = [
+  { title: '信息需求', key: 'prompt' },
+  { title: '分类', key: 'category', width: 170 },
+  { title: '批注', dataIndex: 'annotationCount', width: 80 },
+  { title: '状态', key: 'status', width: 90 },
+  { title: '提交时间', dataIndex: 'createdAt', width: 180 },
+  { title: '操作', key: 'actions', width: 120 },
 ]
 
-onMounted(() => fetchData())
+async function loadData() {
+  const [caseRes, diaryRes] = await Promise.all([getMySubmissions(), getDiaries()])
+  submissions.value = caseRes.data.list || []
+  diaries.value = diaryRes.data.list || []
+  diaryProgress.value = diaryRes.data.progress || []
+  stats[0].value = caseRes.data.stats?.total || 0
+  stats[1].value = caseRes.data.stats?.weekCount || 0
+  stats[2].value = diaries.value.length
+  stats[3].value = todaySubmitted.value
+}
+onMounted(loadData)
 
-async function fetchData() {
-  loading.value = true
+const diaryVisible = ref(false)
+const savingDiary = ref(false)
+const editingDiaryId = ref(null)
+const diaryFormRef = ref()
+const diaryDate = ref(dayjs())
+const diaryTime = ref(null)
+const emptyDiary = () => ({ contextText: '', needDescription: '', channels: '', searchProcess: '', outcome: '', reflection: '', isGenaiRelated: false, genaiPlatform: undefined, status: 'draft' })
+const diaryForm = reactive(emptyDiary())
+
+function openDiary(record = null) {
+  editingDiaryId.value = record?.id || null
+  Object.assign(diaryForm, record || emptyDiary())
+  diaryDate.value = dayjs(record?.logDate || today)
+  diaryTime.value = record?.occurredAt ? dayjs(`${record.logDate || today}T${record.occurredAt}`) : null
+  diaryVisible.value = true
+}
+
+async function saveDiary() {
+  await diaryFormRef.value.validate()
+  if (diaryForm.isGenaiRelated && !diaryForm.genaiPlatform) return message.warning('请选择 GenAI 平台')
+  savingDiary.value = true
   try {
-    const res = await getMySubmissions()
-    submissions.value = res.data.list || []
-    if (res.data.stats) {
-      stats[0].value = res.data.stats.total || 0
-      stats[1].value = res.data.stats.weekCount || 0
-      stats[2].value = res.data.stats.goodCases || 0
-      stats[3].value = res.data.stats.avgSatisfaction || 0
-    }
-  } catch {
-    // handled by interceptor
-  } finally {
-    loading.value = false
-  }
+    const payload = { ...diaryForm, logDate: diaryDate.value.format('YYYY-MM-DD'), occurredAt: diaryTime.value?.format('HH:mm') || null }
+    if (editingDiaryId.value) await updateDiary(editingDiaryId.value, payload)
+    else await createDiary(payload)
+    message.success('信息需求记录已保存')
+    diaryVisible.value = false
+    await loadData()
+  } finally { savingDiary.value = false }
 }
 
-async function onDelete(item) {
-  Modal.confirm({
-    title: '确认删除',
-    content: `确定要删除这条提交吗？"${item.prompt?.slice(0, 40)}..."`,
-    okText: '删除',
-    okType: 'danger',
-    cancelText: '取消',
-    onOk: async () => {
-      try {
-        await deleteSubmission(item.id)
-        fetchData()
-      } catch { /* ignore */ }
-    },
-  })
-}
+async function removeDiary(id) { await deleteDiary(id); await loadData() }
+function convertDiary(record) { router.push({ path: '/gallery', query: { submit: '1', diaryId: record.id } }) }
+async function removeCase(id) { await deleteSubmission(id); await loadData() }
 
-// 详情 & 评论
-const detailVisible = ref(false)
-const detailCase = ref(null)
-const detailComments = ref([])
-const detailCommentText = ref('')
-const detailPromptCollapsed = ref(true)
-const detailAnswerCollapsed = ref(true)
+const caseVisible = ref(false)
+const selectedCase = ref(null)
+function openCase(record) { selectedCase.value = record; caseVisible.value = true }
+function reviseCase(record) { router.push({ path: '/gallery', query: { submit: '1', revisionId: record.id } }) }
+function categoryLabel(value) { return optionLabel(CASE_CATEGORIES, value) }
+function statusLabel(value) { return ({ submitted: '待审核', published: '已发布', rejected: '未通过', draft: '草稿' })[value] || value }
+function statusColor(value) { return ({ submitted: 'orange', published: 'green', rejected: 'red', draft: 'default' })[value] }
 
-function openDetail(item) {
-  detailCase.value = item
-  detailVisible.value = true
-  detailCommentText.value = ''
-  detailPromptCollapsed.value = true
-  detailAnswerCollapsed.value = true
-  loadDetailComments(item.id)
-}
-
-async function loadDetailComments(caseId) {
-  try {
-    const res = await getComments(caseId)
-    detailComments.value = res.data || []
-  } catch { detailComments.value = [] }
-}
-
-async function onSendDetailComment() {
-  if (!detailCommentText.value.trim()) return
-  try {
-    await addComment(detailCase.value.id, { content: detailCommentText.value })
-    detailCommentText.value = ''
-    loadDetailComments(detailCase.value.id)
-    detailCase.value.commentCount++
-  } catch { /* ignore */ }
-}
-
-// 图片预览
-const previewVisible = ref(false)
-const previewSrc = ref('')
-
-function onPreviewImage(images, idx) {
-  previewSrc.value = images[idx]
-  previewVisible.value = true
-}
-
-function categoryColor(c) {
-  const m = { campus_info: 'green', news: 'cyan', domain_knowledge: 'geekblue', unreliable_source: 'orange', unverifiable: 'orange', no_source: 'orange', image_understanding: 'purple', database_query: 'purple', login_required: 'purple', interaction_unsatisfied: 'red', workflow: 'red' }
-  return m[c] || 'default'
-}
-
-function categoryLabel(c) {
-  const m = { campus_info: '校园信息缺失', news: '最新新闻/时事', domain_knowledge: '特定领域知识', unreliable_source: '参考来源不可信', unverifiable: '信息来源不可验证', no_source: '无法提供参考来源', image_understanding: '图片理解失败', database_query: '特定数据库查询', login_required: '需要登录网站', interaction_unsatisfied: '对交互不满意', workflow: '工作流不匹配' }
-  return m[c] || c
-}
-
-function renderMd(text) {
-  return DOMPurify.sanitize(marked(text || ''))
+const passwordVisible = ref(false)
+const passwordForm = reactive({ currentPassword: '', newPassword: '' })
+async function savePassword() {
+  await changePassword(passwordForm)
+  passwordVisible.value = false
+  passwordForm.currentPassword = ''
+  passwordForm.newPassword = ''
+  message.success('密码已更新')
 }
 </script>
 
 <style scoped>
-.profile-page {
-  display: flex;
-  height: 100vh;
-  background: #fff;
-}
-
-.main {
-  flex: 1;
-  overflow-y: auto;
-  padding: 24px 32px;
-}
-
-.profile-header {
-  margin-bottom: 0;
-}
-
-/* 卡片网格 */
-.card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
-  gap: 20px;
-}
-
-/* 案例卡片 */
-.case-card {
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  padding: 24px;
-  background: #fff;
-  transition: box-shadow 0.2s;
-  display: flex;
-  flex-direction: column;
-}
-
-.case-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
-
-.case-card-top { margin-bottom: 12px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-
-.card-img-badge {
-  font-size: 12px;
-  color: #999;
-  margin-left: auto;
-}
-
-.case-prompt {
-  font-size: 16px;
-  line-height: 1.7;
-  color: #222;
-  cursor: pointer;
-  margin-bottom: 10px;
-  flex: 1;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.case-answer {
-  font-size: 14px;
-  color: #888;
-  line-height: 1.6;
-  cursor: pointer;
-  margin-bottom: 6px;
-}
-
-.case-tags { margin-bottom: 8px; }
-
-.case-card-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: auto;
-  padding-top: 12px;
-  border-top: 1px solid #f0f0f0;
-  font-size: 13px;
-}
-
-.case-date { color: #999; }
-
-/* 详情 */
-.detail-section {
-  margin-bottom: 16px;
-}
-
-.detail-section-title {
-  font-size: 13px;
-  color: #999;
-  margin-bottom: 4px;
-}
-
-.detail-answer {
-  line-height: 1.5;
-  white-space: normal;
-}
-
-.detail-images {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.detail-img {
-  width: 120px;
-  height: 120px;
-  object-fit: cover;
-  border-radius: 6px;
-  cursor: pointer;
-  border: 1px solid #eee;
-}
-
-.detail-img:hover { border-color: #1677ff; }
-
-.collapsed {
-  max-height: 120px;
-  overflow: hidden;
-  position: relative;
-}
-
-.collapsed::after {
-  content: '';
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 40px;
-  background: linear-gradient(transparent, #fff);
-}
-
-.collapse-btn {
-  padding: 0;
-  font-size: 12px;
-  margin-top: 4px;
-}
-
-/* Markdown */
-.markdown-body :deep(h1) { font-size: 1.3em; margin: 0.5em 0 0.25em; }
-.markdown-body :deep(h2) { font-size: 1.15em; margin: 0.5em 0 0.25em; }
-.markdown-body :deep(h3) { font-size: 1.05em; margin: 0.4em 0 0.2em; }
-.markdown-body :deep(p) { margin: 0.3em 0; }
-.markdown-body :deep(ul), .markdown-body :deep(ol) { padding-left: 1.5em; margin: 0.25em 0; }
-.markdown-body :deep(li) { margin: 0.1em 0; }
-.markdown-body :deep(code) {
-  background: rgba(0, 0, 0, 0.06);
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: 'Consolas', 'Monaco', monospace;
-  font-size: 0.9em;
-}
-.markdown-body :deep(pre) {
-  background: #1e1e1e;
-  padding: 16px;
-  border-radius: 8px;
-  overflow-x: auto;
-  margin: 0.5em 0;
-}
-.markdown-body :deep(pre code) {
-  background: transparent;
-  padding: 0;
-  font-size: 0.85em;
-  line-height: 1.5;
-}
-.markdown-body :deep(strong) { font-weight: 600; }
-.markdown-body :deep(blockquote) {
-  border-left: 3px solid #1677ff;
-  padding-left: 12px;
-  margin: 0.5em 0;
-  color: #666;
-}
-.markdown-body :deep(table) { border-collapse: collapse; margin: 0.5em 0; }
-.markdown-body :deep(th), .markdown-body :deep(td) {
-  border: 1px solid #ddd;
-  padding: 6px 12px;
-  text-align: left;
-}
-.markdown-body :deep(th) { background: #f5f5f5; font-weight: 600; }
+.profile-page { display: flex; height: 100vh; background: var(--hib-paper); color: var(--hib-text); }
+.main { flex: 1; min-width: 0; overflow: auto; padding: 28px 36px 48px; }
+.profile-header { display: flex; align-items: center; justify-content: space-between; padding: 4px 0 24px; border-bottom: 1px solid var(--hib-line); }
+.identity { display: flex; align-items: center; gap: 16px; }
+.identity :deep(.ant-avatar) { flex: 0 0 auto; }
+.identity :deep(.ant-avatar) { color: #fff; background: var(--hib-red); box-shadow: 0 0 0 4px var(--hib-red-soft); }
+.identity h1 { margin: 0 0 4px; font-size: 24px; }
+.identity-meta { display: flex; align-items: center; gap: 10px; color: var(--hib-muted); }
+.stat-strip { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); border-bottom: 1px solid var(--hib-line); }
+.stat-item { padding: 22px 20px 20px 0; }
+.stat-item span { display: block; color: var(--hib-muted); font-size: 13px; }
+.stat-item strong { font-size: 28px; margin-right: 4px; font-family: Georgia, serif; }
+.stat-item small { color: var(--hib-muted); }
+.workspace-tabs { margin-top: 16px; }
+.section-toolbar { min-height: 72px; display: flex; justify-content: space-between; align-items: center; }
+.section-toolbar h2 { margin: 0 0 4px; font-size: 18px; }
+.section-toolbar p { margin: 0; color: var(--hib-muted); }
+.toolbar-actions { display: flex; align-items: center; gap: 14px; }
+.primary-cell { color: var(--hib-text); line-height: 1.5; }
+.secondary-cell { color: var(--hib-muted); font-size: 12px; margin-top: 3px; max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
+.detail-label { color: #6e7872; font-size: 12px; margin: 18px 0 6px; text-transform: uppercase; }
+.case-detail > p { white-space: pre-wrap; }
+.rejection-text { max-width: 180px; margin-top: 4px; color: #a6404c; font-size: 12px; line-height: 1.4; }
+.overall-note { margin-top: 18px; padding: 14px; border-left: 3px solid var(--hib-red); background: var(--hib-red-soft); }
+@media (max-width: 900px) { .main { padding: 20px; } .stat-strip { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 760px) { .main { padding: 72px 14px 32px; } .profile-header { align-items: stretch; flex-direction: column; gap: 14px; } .profile-header > :deep(.ant-btn) { align-self: flex-end; } .identity { min-width: 0; } .identity h1 { font-size: 20px; overflow-wrap: anywhere; } .identity-meta { align-items: flex-start; flex-direction: column; gap: 3px; } .stat-item { padding: 16px 8px 14px 0; } .section-toolbar { align-items: flex-start; gap: 12px; } }
 </style>

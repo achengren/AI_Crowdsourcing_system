@@ -1,83 +1,142 @@
 import { Router } from 'express'
-import { getDb, genId, saveDb } from '../db.js'
+import { genId, one, query, transaction } from '../db.js'
 import { authMiddleware } from '../middleware.js'
-import { sendVisionMessage, sendTextMessage, generateTitle, evaluateResponseQuality, generateSolutionSuggestion } from '../services/chatService.js'
+import { sendVisionMessage, sendTextMessage, generateTitle, generateSolutionSuggestion, summarizeConversation } from '../services/chatService.js'
+import { acquireAiSlot, releaseAiSlot } from '../services/aiLimiter.js'
+import { AI_CONTEXT_TOKEN_BUDGET } from '../config.js'
+import { contextWithSummary, estimateTokens, selectContextWindow } from '../services/contextWindow.js'
 
 const router = Router()
 
 router.post('/send', authMiddleware, async (req, res) => {
-  try {
-    const { prompt, conversationId, imageUrl } = req.body
-    if (!prompt && !imageUrl) return res.status(400).json({ code: 1, message: '请输入内容' })
+  const { prompt, conversationId, imageUrl } = req.body
+  if (!prompt && !imageUrl) return res.status(400).json({ message: '请输入内容' })
+  if (!acquireAiSlot(req.user.id)) return res.status(429).json({ message: 'AI 请求较多，请等待当前请求完成后再试' })
 
-    let convId = conversationId
-    if (!convId) {
-      convId = genId()
-      const title = (prompt || '图片对话').slice(0, 30)
-      getDb().run("INSERT INTO conversations (id, user_id, title) VALUES (?, ?, ?)", [convId, req.user.id, title])
-    } else {
-      const conv = getDb().exec("SELECT user_id FROM conversations WHERE id = ?", [convId])
-      if (!conv[0] || !conv[0].values.length) {
-        return res.status(404).json({ code: 1, message: '会话不存在' })
-      }
-      if (conv[0].values[0][0] !== req.user.id) {
-        return res.status(403).json({ code: 1, message: '无权操作' })
-      }
+  try {
+    let conversation = null
+    if (conversationId) {
+      conversation = await one(
+        `SELECT id, user_id AS userId, context_summary AS contextSummary,
+                summarized_message_count AS summarizedMessageCount
+         FROM conversations WHERE id = ?`,
+        [conversationId]
+      )
+      if (!conversation) return res.status(404).json({ message: '会话不存在' })
+      if (conversation.userId !== req.user.id) return res.status(403).json({ message: '无权操作' })
     }
 
-    const history = getDb().exec(
-      "SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 20",
-      [convId]
-    )
-    const historyMessages = history[0]
-      ? history[0].values.map(r => ({ role: r[0], content: r[1] })).reverse()
+    let historyMessages = conversationId
+      ? await query(
+          `SELECT role, content, vision_context AS visionContext
+           FROM messages WHERE conversation_id = ? ORDER BY created_at ASC`,
+          [conversationId]
+        )
       : []
 
-    const reply = imageUrl
+    let contextSummary = conversation?.contextSummary || ''
+    if (conversation) {
+      const summarizedCount = Number(conversation.summarizedMessageCount || 0)
+      const unsummarized = historyMessages.slice(summarizedCount)
+      const reservedTokens = 2500 + estimateTokens(prompt) + estimateTokens(contextSummary)
+      let selected = selectContextWindow(unsummarized, AI_CONTEXT_TOKEN_BUDGET, reservedTokens)
+      if (selected.messagesToSummarize.length) {
+        try {
+          const newSummary = await summarizeConversation(contextSummary, selected.messagesToSummarize)
+          if (newSummary) {
+            const nextCount = summarizedCount + selected.messagesToSummarize.length
+            const updated = await query(
+              `UPDATE conversations SET context_summary = ?, summarized_message_count = ?
+               WHERE id = ? AND summarized_message_count = ?`,
+              [newSummary, nextCount, conversationId, summarizedCount]
+            )
+            if (updated.affectedRows) contextSummary = newSummary
+            else {
+              const latest = await one(
+                `SELECT context_summary AS contextSummary, summarized_message_count AS summarizedMessageCount
+                 FROM conversations WHERE id = ?`,
+                [conversationId]
+              )
+              contextSummary = latest?.contextSummary || contextSummary
+              const latestCount = Number(latest?.summarizedMessageCount || summarizedCount)
+              selected = selectContextWindow(
+                historyMessages.slice(latestCount),
+                AI_CONTEXT_TOKEN_BUDGET,
+                2500 + estimateTokens(prompt) + estimateTokens(contextSummary)
+              )
+            }
+          }
+        } catch (error) {
+          console.warn('对话摘要更新失败，使用近期上下文继续回答:', error.message)
+        }
+      }
+      historyMessages = contextWithSummary(contextSummary, selected.recentMessages)
+    }
+
+    const result = imageUrl
       ? await sendVisionMessage(historyMessages, prompt, imageUrl)
       : await sendTextMessage(historyMessages, prompt)
 
-    const qualityCheck = await evaluateResponseQuality(reply, prompt)
-
+    const convId = conversationId || genId()
+    const userMessageId = genId()
+    const assistantMessageId = genId()
     const userContent = imageUrl ? `[image:${imageUrl}]\n${prompt || ''}` : prompt
-    const msg1Id = genId()
-    const msg2Id = genId()
-    const now = new Date().toISOString()
-    getDb().run("INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, 'user', ?, ?)",
-      [msg1Id, convId, userContent, now])
-    getDb().run("INSERT INTO messages (id, conversation_id, role, content, quality_flag, created_at) VALUES (?, ?, 'assistant', ?, ?, ?)",
-      [msg2Id, convId, reply, JSON.stringify(qualityCheck), now])
-    saveDb()
+
+    await transaction(async connection => {
+      if (!conversationId) {
+        await connection.execute(
+          'INSERT INTO conversations (id, user_id, title) VALUES (?, ?, ?)',
+          [convId, req.user.id, String(prompt || '图片对话').slice(0, 30)]
+        )
+      }
+      await connection.execute(
+        `INSERT INTO messages (id, conversation_id, role, content, vision_context, modality)
+         VALUES (?, ?, 'user', ?, ?, ?)`,
+        [userMessageId, convId, userContent, result.visionContext || null, imageUrl ? 'vision' : 'text']
+      )
+      await connection.execute(
+        `INSERT INTO messages (id, conversation_id, role, content, provider, model, modality, thinking_enabled)
+         VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?)`,
+        [assistantMessageId, convId, result.content, result.provider, result.model, result.modality, result.thinkingEnabled ? 1 : 0]
+      )
+      await connection.execute('UPDATE conversations SET updated_at = CURRENT_TIMESTAMP(3) WHERE id = ?', [convId])
+    })
 
     if (!conversationId) {
-      try {
-        const autoTitle = await generateTitle(prompt)
-        if (autoTitle) {
-          getDb().run("UPDATE conversations SET title = ? WHERE id = ?", [autoTitle, convId])
-          saveDb()
-        }
-      } catch (e) {
-        console.error('标题生成失败:', e.message)
-      }
+      generateTitle(prompt).then(title => {
+        if (title) query('UPDATE conversations SET title = ? WHERE id = ?', [title, convId]).catch(() => {})
+      }).catch(() => {})
     }
 
-    res.json({ code: 0, data: { reply, conversationId: convId, qualityFlag: qualityCheck } })
-  } catch (err) {
-    console.error('AI API 错误:', err.message)
-    res.status(500).json({ code: 1, message: 'AI 服务暂时不可用，请稍后重试' })
+    res.json({
+      code: 0,
+      data: {
+        reply: result.content,
+        conversationId: convId,
+        messageId: assistantMessageId,
+        provider: result.provider,
+        model: result.model,
+        modality: result.modality,
+        thinkingEnabled: result.thinkingEnabled,
+      },
+    })
+  } catch (error) {
+    console.error('AI API 错误:', error.message)
+    const stage = error.stage === 'vision' ? 'vision' : 'answer'
+    res.status(500).json({
+      message: stage === 'vision' ? '图片识别失败，请重试' : '回答生成失败，请重试',
+      stage,
+    })
+  } finally {
+    releaseAiSlot(req.user.id)
   }
 })
 
 router.post('/solution-suggestion', authMiddleware, async (req, res) => {
-  try {
-    const { prompt, reply } = req.body
-    if (!prompt || !reply) return res.status(400).json({ code: 1, message: '缺少参数' })
-    const suggestion = await generateSolutionSuggestion(prompt, reply)
-    res.json({ code: 0, data: { suggestion } })
-  } catch (err) {
-    console.error('生成建议失败:', err.message)
-    res.status(500).json({ code: 1, message: '生成建议失败' })
-  }
+  const { prompt, reply } = req.body
+  if (!prompt || !reply) return res.status(400).json({ message: '缺少参数' })
+  const suggestion = await generateSolutionSuggestion(prompt, reply)
+  res.json({ code: 0, data: { suggestion } })
 })
 
 export default router

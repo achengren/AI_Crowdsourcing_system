@@ -1,7 +1,7 @@
 import client from './client'
 
 export function sendMessage({ prompt, conversationId, imageUrl }) {
-  return client.post('/chat/send', { prompt, conversationId, imageUrl })
+  return client.post('/chat/send', { prompt, conversationId, imageUrl }, { timeout: 240000 })
 }
 
 export function getConversations() {
@@ -10,10 +10,6 @@ export function getConversations() {
 
 export function createConversation(title) {
   return client.post('/conversations', { title })
-}
-
-export function deleteConversation(id) {
-  return client.delete(`/conversations/${id}`)
 }
 
 export function getMessages(conversationId) {

@@ -1,130 +1,169 @@
-# AI Crowdsourcing System
+# HIB课程管理系统
 
-众包收集 AI 对话失败案例的平台。用户可以在此与多种 AI 模型对话，将不满意的回答提交到案例广场，供社区浏览、点赞和评论，以此发现和记录当前 AI 系统的不足之处。
+面向课程教学的 AI 错误案例与信息需求记录平台。账号由管理员统一创建，学生可完成 AI 对话、片段批注、案例提交和每日信息需求日记；管理员负责账号管理、案例管理、数据查看与导出。
 
-## 功能
+## 主要功能
 
-- **多模型 AI 对话** — Llama3.1 主对话 + Qwen3-VL 视觉识图，全部运行在本地 Ollama；保留 DeepSeek API 接入接口，可一键切换
-- **案例提交** — 两种入口：对话中一键"提交为案例"（自动填入内容），或广场页粘贴分享链接解析后提交；含平台、分类、满意度、标签、截图等
-- **链接解析** — 自动提取 DeepSeek / ChatGPT / Claude / Kimi / 通义千问 分享链接中的对话内容
-- **AI 质量反馈** — 自动检测 AI 回复是否可能存在信息缺失，提示用户并提供"如何改进"建议和快捷提交入口
-- **案例广场** — 浏览、搜索、按分类/热度筛选，点赞和评论
-- **用户系统** — 学号注册登录、JWT 认证、游客模式，每人每日 5 条/每周 20 条提交限制
+- 统一账号登录，无游客模式和自主注册；账号和密码由管理员发放
+- DeepSeek 文本对话、Ollama 回退，以及 Qwen 读图后交由 DeepSeek 生成最终回复的视觉流水线
+- 对话按 token 预算保留近期上下文，较早内容自动摘要并持久化；图片解析按图片哈希和视觉模型缓存
+- 支持公开分享链接、复制粘贴完整对话、Qwen 识别连续对话截图和手动填写四种案例导入方式
+- 选中 AI 回复片段添加独立错误类型和批注；批注提交后不可修改
+- 已发布案例支持其他学生继续添加片段批注，并针对具体批注投赞成票、反对票和评论；禁止给自己的批注投票，批注可撤回但不物理删除
+- 站内 AI 对话记录持续保留，学生不能自行删除
+- 对话转案例时由服务端锁定原始平台、模型和回复
+- 新案例审核后才进入案例广场；退回必须说明原因，学生修改后以关联的新版本重提
+- 每日信息需求日记、GenAI 标记和日记转案例
+- 管理员账号 CRUD、批量导入、全部状态案例管理、按日期检查每位学生的作业完成度、对话/日记查看、XLSX 导出和审计日志
+- MySQL 持久化、应用级最小权限账号和 AI 并发保护
+- 本地磁盘或 S3 兼容对象存储，支持 Docker 云端部署
 
 ## 技术栈
 
 | 层 | 技术 |
 |---|---|
-| 前端 | Vue 3 + Vite + Ant Design Vue + Pinia |
-| 后端 | Express 5 + SQLite (sql.js) |
-| AI | Ollama（本地模型，无需 API Key）+ DeepSeek API 接口（预留，可切换） |
-| 安全 | JWT + bcrypt + DOMPurify XSS 防护 |
+| 前端 | Vue 3、Vite、Ant Design Vue、Pinia |
+| 后端 | Node.js 22、Express 5 |
+| 数据库 | MySQL 8、mysql2、SQL migrations |
+| AI | DeepSeek API、Ollama、OpenAI 兼容协议 |
+| 安全 | JWT、bcrypt、后端 RBAC、Zod 校验、审计日志 |
+| 文件 | 本地磁盘或 S3 兼容对象存储 |
 
-## AI 模型路由
+## AI 路由
 
-当前默认使用 Ollama 本地模型，无需配置 API Key 即可运行。项目保留完整 DeepSeek API 接入代码，切换方式见下方说明。
+| 场景 | 默认模型 | 说明 |
+|---|---|---|
+| 主文本对话 | `DEEPSEEK_MODEL` | 显式关闭 thinking；无 API Key 时回退至 Ollama |
+| 标题与质量评估 | `TITLE_MODEL` | Ollama 文本任务 |
+| 图片问答 | `VISION_MODEL` → `DEEPSEEK_MODEL` | 视觉模型提取图片信息，DeepSeek 结合会话上下文生成最终回复 |
 
-| 场景 | 模型 | 提供商 | 说明 |
-|---|---|---|---|
-| 主对话 | `llama3.1:8b` | Ollama 本地 | 文本生成与对话 |
-| 视觉识图 | `qwen3-vl:8b` | Ollama 本地 | 图片理解、OCR |
-| 标题生成/质量评估 | `llama3.1:8b` | Ollama 本地 | 自动摘要与回复质量检测 |
+Ollama 地址和所有模型名称必须通过环境变量配置，源码和示例文件不包含实际部署值。
 
-### 切换到 DeepSeek API
+## 本地开发
 
-项目已预留 DeepSeek API 接入接口，未来用户规模增长后可切换以获得更好的并发与响应速度：
+要求 Node.js 22 和 MySQL 8。
 
-1. 设置环境变量 `DEEPSEEK_API_KEY=your_key`
-2. 编辑 `server/services/chatService.js`，将 `sendTextMessage` 函数中的 `ollama` 改为 `deepseek`，`OLLAMA_TEXT_MODEL` 改为 `DEEPSEEK_MODEL`，并恢复 `import { deepseek, ollama }` 导入
-
-模型名称和 API 地址在 `server/config.js` 中统一配置。
-
-## 快速开始
-
-```bash
-# 安装依赖
+```powershell
 npm install
+Copy-Item .env.example .env
+```
 
-# （可选）如需使用 DeepSeek API 替代本地模型
-# echo "DEEPSEEK_API_KEY=sk-xxx" > .env
+编辑 `.env`：
 
-# 启动开发服务（前端 + 后端）
+- `DB_ADMIN_PASSWORD`：现有 MySQL root 密码，仅供首次初始化使用
+- `DB_PASSWORD`：新建的低权限应用账号密码
+- `JWT_SECRET`：至少 32 位随机字符串，不得与数据库密码复用
+- `ADMIN_PASSWORD`：平台初始管理员的网页登录密码
+- `DEEPSEEK_API_KEY`：使用 DeepSeek 时填写
+- `DEEPSEEK_MODEL`：DeepSeek 文本模型名称
+- `OLLAMA_BASE_URL`：Ollama 的 OpenAI 兼容接口地址，以 `/v1` 结尾
+- `OLLAMA_TEXT_MODEL`：无 DeepSeek Key 时使用的文本模型
+- `VISION_MODEL`：负责读取图片的视觉模型
+- `TITLE_MODEL`：负责标题和质量评估的轻量文本模型
+- `AI_CONTEXT_TOKEN_BUDGET`：单次回答使用的近似上下文 token 预算
+- `AI_TEXT_TIMEOUT_MS` / `AI_VISION_TIMEOUT_MS`：文本回答与图片识别的独立超时
+- `AI_TEXT_MAX_RETRIES` / `AI_VISION_MAX_RETRIES`：文本回答与图片识别的独立重试次数
+
+初始化项目数据库与低权限账号：
+
+```powershell
+npm run db:provision
+```
+
+成功后应清空本机 `.env` 中的 `DB_ADMIN_PASSWORD`。后端日常运行只使用 `DB_USER` 和 `DB_PASSWORD`。
+
+从旧版 `server/data.db` 导入历史数据时执行一次：
+
+```powershell
+npm run db:import-sqlite
+```
+
+启动前后端：
+
+```powershell
 npm run dev
 ```
 
-前端 `http://localhost:5173`，后端 `http://localhost:3001`。
+- 前端：`http://localhost:5173`
+- 后端健康检查：`http://localhost:3001/api/health`
+- 管理后台：管理员登录后访问 `/admin`
 
-> 默认使用 Ollama 本地模型，无需配置 API Key。确保 Ollama 服务已启动并部署了 `llama3.1:8b` 和 `qwen3-vl:8b` 两个模型。
+## 账号管理
 
-## 环境变量
+系统不提供注册和游客入口。初始管理员由 `ADMIN_STUDENT_ID`、`ADMIN_NAME`、`ADMIN_PASSWORD` 创建；管理员随后在后台新增或批量导入学生账号。管理员创建或重置密码后，用户可直接登录使用，也可在个人主页主动修改密码。
+
+CSV/XLSX 导入支持以下列名：`studentId`/`学号`/`账号`、`name`/`姓名`、`password`/`初始密码`、`role`/`角色`、`className`/`班级`。
+
+## 文件存储
+
+本地默认配置：
 
 ```env
-# 可选：仅在使用 DeepSeek API 时需要
-DEEPSEEK_API_KEY=your_deepseek_api_key
+STORAGE_DRIVER=local
 ```
 
-Ollama 服务地址及所有模型名称在 `server/config.js` 中配置。
+图片写入 `server/uploads/`。云端建议配置 S3、MinIO、Cloudflare R2 或其他 S3 兼容服务：
 
-## 备注
-
-- **图片存储**：当前使用本地磁盘存储（`server/uploads/`），删除会话时同步清理关联图片。后期用户量增长后，建议迁移至对象存储（如阿里云 OSS、AWS S3），通过 presigned URL 上传和 CDN 分发，降低磁盘和管理成本。
-
-## 目录结构
-
-```
-├── src/
-│   ├── api/              # 前端 API 调用
-│   ├── components/       # 公共组件（布局、侧边栏等）
-│   ├── pages/
-│   │   ├── Chat/         # 对话页
-│   │   ├── Gallery/      # 案例广场
-│   │   ├── Login/        # 登录注册
-│   │   └── Profile/      # 个人中心
-│   └── router/           # 路由配置
-├── server/
-│   ├── index.js          # 入口（路由挂载）
-│   ├── config.js         # 常量配置
-│   ├── ai.js             # AI 客户端（DeepSeek + Ollama）
-│   ├── db.js             # SQLite 生命周期
-│   ├── middleware.js      # 认证 + 上传中间件
-│   ├── linkParser.js     # AI 分享链接解析
-│   ├── routes/
-│   │   ├── auth.route.js           # 注册/登录
-│   │   ├── conversations.route.js  # 会话 CRUD
-│   │   ├── chat.route.js           # AI 对话（文本+视觉）
-│   │   ├── upload.route.js         # 图片上传
-│   │   ├── linkParse.route.js      # 链接解析
-│   │   ├── submissions.route.js    # 案例提交
-│   │   └── cases.route.js          # 案例广场+点赞+评论
-│   ├── services/
-│   │   ├── chatService.js          # 对话逻辑（视觉/文本/标题）
-│   │   └── submissionService.js    # 提交限制/统计
-│   ├── utils/
-│   │   └── image.js                # 图片/标签工具
-│   └── uploads/           # 上传图片目录
-└── vite.config.js
+```env
+STORAGE_DRIVER=s3
+S3_REGION=auto
+S3_ENDPOINT=https://your-s3-endpoint.example.com
+S3_BUCKET=ai-crowdsourcing
+S3_ACCESS_KEY_ID=replace-me
+S3_SECRET_ACCESS_KEY=replace-me
+S3_PUBLIC_BASE_URL=https://cdn.example.com
+S3_FORCE_PATH_STYLE=false
+S3_KEY_PREFIX=uploads
 ```
 
-## 数据库
+`S3_PUBLIC_BASE_URL` 必须能够公开读取已上传对象；生产环境建议在对象存储前配置 CDN 和 HTTPS。
 
-SQLite，文件存储在 `server/data.db`。包含以下表：
+## Docker 部署
 
-- `users` — 用户（学号、姓名、密码哈希）
-- `conversations` / `messages` — 对话历史
-- `submissions` — 案例提交
-- `likes` / `comments` — 点赞和评论
+服务器需安装 Docker Engine 和 Compose 插件。
+
+```bash
+cp .env.production.example .env.production
+# 编辑所有密码、域名、AI 与存储配置
+docker compose --env-file .env.production -f docker-compose.production.yml up -d --build
+```
+
+容器会等待 MySQL 健康后启动，应用启动时自动执行数据库迁移，并由 Express 托管 `dist/` 前端文件。对公网服务时应在 3001 端口前配置 Nginx/Caddy、HTTPS、请求体限制和访问日志，不要直接暴露 MySQL 3306 端口。
+
+生产环境不应把 `.env.production` 提交到 Git。初始管理员创建成功后，可从部署环境删除 `ADMIN_PASSWORD`。
+
+## 云端迁移与备份
+
+1. 在本机使用 `mysqldump -u ai_crowdsourcing -p ai_crowdsourcing > ai_crowdsourcing.sql` 导出。
+2. 将 SQL 文件通过受保护的通道传到服务器。
+3. 在云端 MySQL 使用 `mysql -u ai_crowdsourcing -p ai_crowdsourcing < ai_crowdsourcing.sql` 导入。
+4. 本地存储模式还需迁移 `server/uploads/`；如果已使用 S3，无需复制应用磁盘文件。
+5. 验证 `/api/health`、用户数量、对话数量、案例数量和管理员登录后再切换域名。
+
+建议至少每日执行 MySQL 自动备份，并为对象存储开启版本控制或生命周期策略。备份必须定期做恢复演练，仅有备份文件不等于可恢复。
+
+## 容量配置
+
+当前默认面向约 100 名课程用户：MySQL 连接池为 15，AI 全局并发为 25，每用户 AI 并发为 2。部署到云端后应根据模型延迟、CPU/内存、数据库连接数和实际峰值调整 `DB_POOL_SIZE`、`AI_MAX_CONCURRENCY`、`AI_MAX_PER_USER`。
+
+## 常用命令
+
+```bash
+npm run dev                # 前后端开发服务
+npm run server             # 仅后端
+npm run build              # 前端生产构建
+npm run db:provision       # 一次性创建本地数据库和低权限账号
+npm run db:import-sqlite   # 一次性导入旧 SQLite 数据
+```
 
 ## API 概览
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| POST | `/api/auth/register` | 注册 |
-| POST | `/api/auth/login` | 登录 |
-| GET/POST/DELETE | `/api/conversations` | 会话管理 |
-| POST | `/api/chat/send` | 发送消息（支持图片） |
-| POST | `/api/upload` | 上传图片 |
-| POST | `/api/parse-link` | 解析 AI 分享链接 |
-| POST | `/api/submissions` | 提交案例 |
-| GET | `/api/cases` | 案例广场列表 |
-| POST | `/api/cases/:id/like` | 点赞/取消 |
-| GET/POST | `/api/cases/:id/comments` | 评论列表/发表 |
+| 路径 | 说明 |
+|---|---|
+| `/api/auth/login`、`/api/auth/change-password` | 登录与改密 |
+| `/api/conversations`、`/api/chat` | 对话与消息 |
+| `/api/submissions`、`/api/cases` | 案例提交、审核后广场互动 |
+| `/api/diaries` | 信息需求日记 |
+| `/api/admin` | 管理员账号、数据查看、审核和导出 |
+| `/api/upload` | 本地或 S3 图片上传 |
+| `/api/health` | 数据库与 AI 并发状态 |

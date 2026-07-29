@@ -1,149 +1,82 @@
 <template>
-  <div class="login-page">
-    <div class="login-card">
-      <h1>AI 众包系统</h1>
-      <p class="subtitle">信息行为导论课程平台</p>
+  <main class="login-page">
+    <section class="identity-panel">
+      <div class="brand-lockup">
+        <div class="brand-mark">HIB</div>
+        <div class="brand-copy">
+          <span>HUMAN INFORMATION BEHAVIOR</span>
+          <h1>HIB课程管理系统</h1>
+        </div>
+      </div>
+    </section>
 
-      <a-tabs v-model:activeKey="tab" centered>
-        <a-tab-pane key="login" tab="登录">
-          <a-form :model="loginForm" layout="vertical" @finish="onLogin">
-            <a-form-item label="学号" name="studentId" :rules="[{ required: true, message: '请输入学号' }]">
-              <a-input v-model:value="loginForm.studentId" placeholder="请输入学号" size="large" />
-            </a-form-item>
-
-            <a-form-item label="密码" name="password" :rules="[{ required: true, message: '请输入密码' }]">
-              <a-input-password v-model:value="loginForm.password" placeholder="请输入密码" size="large" />
-            </a-form-item>
-
-            <a-form-item>
-              <a-button type="primary" html-type="submit" size="large" block :loading="loggingIn">
-                登录
-              </a-button>
-            </a-form-item>
-          </a-form>
-        </a-tab-pane>
-
-        <a-tab-pane key="register" tab="注册">
-          <a-form :model="registerForm" layout="vertical" @finish="onRegister">
-            <a-form-item label="学号" name="studentId" :rules="[{ required: true, message: '请输入学号' }]">
-              <a-input v-model:value="registerForm.studentId" placeholder="请输入学号" size="large" />
-            </a-form-item>
-
-            <a-form-item label="姓名" name="name" :rules="[{ required: true, message: '请输入姓名' }]">
-              <a-input v-model:value="registerForm.name" placeholder="请输入你的姓名" size="large" />
-            </a-form-item>
-
-            <a-form-item label="密码" name="password" :rules="[{ required: true, min: 6, message: '密码至少6位' }]">
-              <a-input-password v-model:value="registerForm.password" placeholder="设置密码（至少6位）" size="large" />
-            </a-form-item>
-
-            <a-form-item label="确认密码" name="confirmPwd" :rules="[{ required: true, validator: validateConfirmPwd }]">
-              <a-input-password v-model:value="registerForm.confirmPwd" placeholder="再次输入密码" size="large" />
-            </a-form-item>
-
-            <a-form-item>
-              <a-button type="primary" html-type="submit" size="large" block :loading="registering">
-                注册
-              </a-button>
-            </a-form-item>
-          </a-form>
-        </a-tab-pane>
-      </a-tabs>
-
-      <a-divider>或</a-divider>
-
-      <a-button block size="large" @click="onGuestLogin">游客模式</a-button>
-    </div>
-  </div>
+    <section class="login-panel">
+      <div class="login-form-wrap">
+        <div class="form-heading">
+          <span class="eyebrow">COURSE ACCESS</span>
+          <h2>账号登录</h2>
+        </div>
+        <a-form :model="loginForm" layout="vertical" @finish="onLogin">
+          <a-form-item label="账号" name="studentId" :rules="[{ required: true, message: '请输入账号' }]">
+            <a-input v-model:value="loginForm.studentId" placeholder="学号或管理员账号" size="large">
+              <template #prefix><IdcardOutlined /></template>
+            </a-input>
+          </a-form-item>
+          <a-form-item label="密码" name="password" :rules="[{ required: true, message: '请输入密码' }]">
+            <a-input-password v-model:value="loginForm.password" placeholder="请输入密码" size="large">
+              <template #prefix><LockOutlined /></template>
+            </a-input-password>
+          </a-form-item>
+          <a-button type="primary" html-type="submit" size="large" block :loading="loggingIn">登录</a-button>
+        </a-form>
+      </div>
+    </section>
+  </main>
 </template>
 
 <script setup>
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
+import { IdcardOutlined, LockOutlined } from '@ant-design/icons-vue'
 import { useAuthStore } from '../../store/auth'
-import { login, register } from '../../api/auth'
+import { login } from '../../api/auth'
 
 const router = useRouter()
 const auth = useAuthStore()
-const tab = ref('login')
 const loggingIn = ref(false)
-const registering = ref(false)
-
 const loginForm = reactive({ studentId: '', password: '' })
-const registerForm = reactive({ studentId: '', name: '', password: '', confirmPwd: '' })
-
-function validateConfirmPwd(_rule, value) {
-  if (value !== registerForm.password) {
-    return Promise.reject('两次密码不一致')
-  }
-  return Promise.resolve()
-}
 
 async function onLogin() {
   loggingIn.value = true
   try {
-    const res = await login({ studentId: loginForm.studentId, password: loginForm.password })
+    const res = await login(loginForm)
     auth.login(res.data.token, res.data.user)
     message.success('登录成功')
-    router.push('/chat')
-  } catch {
-    // handled by interceptor
+    router.push(res.data.user.role === 'admin' ? '/admin' : '/chat')
   } finally {
     loggingIn.value = false
   }
 }
-
-async function onRegister() {
-  registering.value = true
-  try {
-    const res = await register({
-      studentId: registerForm.studentId,
-      name: registerForm.name,
-      password: registerForm.password,
-    })
-    auth.login(res.data.token, res.data.user)
-    message.success('注册成功，已自动登录')
-    router.push('/chat')
-  } catch {
-    // handled by interceptor
-  } finally {
-    registering.value = false
-  }
-}
-
-function onGuestLogin() {
-  auth.loginAsGuest()
-  message.success('已进入游客模式')
-  router.push('/chat')
-}
 </script>
 
 <style scoped>
-.login-page {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-}
-
-.login-card {
-  width: 440px;
-  padding: 40px;
-  background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
-}
-
-.login-card h1 {
-  text-align: center;
-  margin-bottom: 8px;
-}
-
-.subtitle {
-  text-align: center;
-  color: #999;
-  margin-bottom: 24px;
-}
+.login-page { min-height: 100vh; display: grid; grid-template-columns: minmax(400px, 0.8fr) minmax(480px, 1.2fr); background: var(--hib-paper); color: var(--hib-text); }
+.identity-panel { padding: 64px; display: grid; place-items: center; background: var(--hib-red-dark); color: #fff; position: relative; overflow: hidden; }
+.identity-panel::before { content: ''; position: absolute; inset: 28px; border: 1px solid rgba(255,255,255,.18); pointer-events: none; }
+.identity-panel::after { content: 'HIB'; position: absolute; right: -34px; bottom: -54px; color: rgba(255,255,255,.045); font-family: Georgia, serif; font-size: 250px; line-height: 1; pointer-events: none; }
+.brand-lockup { width: min(560px, 100%); display: flex; align-items: center; gap: 26px; position: relative; z-index: 1; }
+.brand-mark { width: 82px; height: 82px; flex: 0 0 82px; border: 1px solid rgba(255,255,255,.38); background: rgba(255,255,255,.07); display: grid; place-items: center; font-family: Georgia, serif; font-size: 25px; }
+.brand-copy span { display: block; margin-bottom: 10px; color: #f1dfe1; font-size: 12px; letter-spacing: 0; }
+.brand-copy h1 { margin: 0; color: #fff; font-family: "Noto Serif SC", "Songti SC", serif; font-size: 38px; font-weight: 600; letter-spacing: 0; line-height: 1.35; }
+.login-panel { display: grid; place-items: center; padding: 56px; background: #fbfaf9; }
+.login-form-wrap { width: min(420px, 100%); }
+.form-heading { margin-bottom: 32px; }
+.eyebrow { color: var(--hib-red); font-size: 12px; letter-spacing: 0; }
+.form-heading h2 { margin: 8px 0 0; font-size: 28px; }
+.login-form-wrap :deep(.ant-input-affix-wrapper) { border-radius: 4px; }
+.login-form-wrap :deep(.ant-btn) { border-radius: 4px; }
+.login-form-wrap :deep(.ant-input-affix-wrapper) { min-height: 44px; background: #fff; }
+.login-form-wrap :deep(.ant-btn-primary) { height: 44px; box-shadow: 0 4px 12px rgba(153,65,75,.16); }
+@media (max-width: 760px) { .login-page { grid-template-columns: 1fr; } .identity-panel { min-height: 220px; padding: 38px 30px; } .identity-panel::before { inset: 16px; } .identity-panel::after { right: -18px; bottom: -24px; font-size: 132px; } .brand-lockup { gap: 16px; } .brand-mark { width: 62px; height: 62px; flex-basis: 62px; font-size: 20px; } .brand-copy span { margin-bottom: 6px; font-size: 11px; } .brand-copy h1 { font-size: 28px; } .login-panel { padding: 36px 24px; } }
 </style>
