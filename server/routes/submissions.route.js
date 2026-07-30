@@ -227,8 +227,8 @@ router.post('/', authMiddleware, async (req, res) => {
         `INSERT INTO submissions
          (id, user_id, prompt, platform, model, ai_answer, category, share_link, satisfaction,
           is_good_case, note, tags, images, source_message_id, source_diary_id, status,
-          revision_of_id, revision_number)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?)`,
+          rejection_reason, revision_of_id, revision_number)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', '', ?, ?)`,
         [id, req.user.id, data.prompt, data.platform, data.model, data.aiAnswer, data.category,
           data.shareLink, data.satisfaction, data.isGoodCase ? 1 : 0, data.note,
           JSON.stringify(data.tags), JSON.stringify(data.images), data.sourceMessageId || null, data.sourceDiaryId || null,

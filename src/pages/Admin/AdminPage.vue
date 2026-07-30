@@ -246,9 +246,9 @@ onMounted(loadOverview)
 const userVisible = ref(false), editingUserId = ref(null), userFormRef = ref()
 const userForm = reactive({ studentId: '', name: '', password: '', role: 'student', status: 'active', className: '' })
 function openUser(record = null) { editingUserId.value = record?.id || null; Object.assign(userForm, record || { studentId: '', name: '', password: '', role: 'student', status: 'active', className: '' }); userVisible.value = true }
-async function saveUser() { await userFormRef.value.validate(); if (editingUserId.value) await updateAdminUser(editingUserId.value, userForm); else await createAdminUser(userForm); userVisible.value = false; message.success('账号已保存'); await loadUsers() }
-async function disableUser(record) { await disableAdminUser(record.id); await loadUsers() }
-async function importUsers(file) { const r = await importAdminUsers(file); message.success(`导入 ${r.data.created} 个账号，跳过 ${r.data.skipped} 个`); await loadUsers(); return false }
+async function saveUser() { await userFormRef.value.validate(); if (editingUserId.value) await updateAdminUser(editingUserId.value, userForm); else await createAdminUser(userForm); userVisible.value = false; message.success('账号已保存'); await Promise.all([loadUsers(), loadOverview()]) }
+async function disableUser(record) { await disableAdminUser(record.id); await Promise.all([loadUsers(), loadOverview()]) }
+async function importUsers(file) { const r = await importAdminUsers(file); message.success(`导入 ${r.data.created} 个账号，跳过 ${r.data.skipped} 个`); await Promise.all([loadUsers(), loadOverview()]); return false }
 const resetVisible = ref(false), resetTarget = ref(null), resetPassword = ref('')
 function openReset(record) { resetTarget.value = record; resetPassword.value = ''; resetVisible.value = true }
 async function saveReset() { if (resetPassword.value.length < 8) return message.warning('密码至少 8 位'); await resetAdminUserPassword(resetTarget.value.id, resetPassword.value); resetVisible.value = false; message.success('密码已重置') }
