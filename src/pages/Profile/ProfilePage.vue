@@ -65,24 +65,27 @@
 
         <a-tab-pane key="cases" tab="我的案例">
           <section class="section-toolbar">
-            <div><h2>案例记录</h2><p>提交后的案例由管理员审核发布</p></div>
+            <div><h2>案例记录</h2><p>案例发布后将直接进入案例广场，管理员可在必要时撤回</p></div>
           </section>
           <a-table :data-source="submissions" :columns="caseColumns" row-key="id" :pagination="{ pageSize: 10 }" :scroll="{ x: 900 }" size="middle">
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'prompt'">
                 <div class="primary-cell">{{ record.prompt }}</div>
-                <div class="secondary-cell">{{ record.platform }}<span v-if="record.model"> · {{ record.model }}</span> · 第 {{ record.revisionNumber || 1 }} 版</div>
+                <div class="secondary-cell">{{ displayPlatform(record) }}<span v-if="record.model"> · {{ record.model }}</span></div>
               </template>
-              <template v-else-if="column.key === 'category'">{{ categoryLabel(record.category) }}</template>
+              <template v-else-if="column.key === 'category'">{{ taxonomyText(record.errorTypes, record.errorType || record.category, ERROR_TYPE_OPTIONS, record.errorTypeOther) }}</template>
               <template v-else-if="column.key === 'status'">
                 <a-tag :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
-                <div v-if="record.status === 'rejected' && record.rejectionReason" class="rejection-text">{{ record.rejectionReason }}</div>
+                <div v-if="record.status === 'withdrawn' && record.withdrawnReason" class="rejection-text">{{ record.withdrawnReason }}</div>
               </template>
               <template v-else-if="column.key === 'actions'">
                 <a-space>
-                  <a-button type="link" size="small" @click="openCase(record)">查看</a-button>
-                  <a-button v-if="record.status === 'rejected'" type="link" size="small" @click="reviseCase(record)">修改后重提</a-button>
-                  <a-popconfirm v-if="!record.revisionOfId && !record.hasNewerRevision" title="确定删除该案例？" @confirm="removeCase(record.id)">
+                  <a-button v-if="record.isEditorDraft" type="link" size="small" @click="continueDraft(record)">继续编辑</a-button>
+                  <a-button v-else type="link" size="small" @click="openCase(record)">查看</a-button>
+                  <a-popconfirm v-if="record.isEditorDraft" title="确定删除这份草稿？" @confirm="removeDraft(record.id)">
+                    <a-button type="link" danger size="small">删除草稿</a-button>
+                  </a-popconfirm>
+                  <a-popconfirm v-if="!record.isEditorDraft && ['draft', 'submitted', 'rejected'].includes(record.status) && !record.revisionOfId && !record.hasNewerRevision" title="确定删除这条旧案例记录？" @confirm="removeCase(record.id)">
                     <a-button type="link" danger size="small">删除</a-button>
                   </a-popconfirm>
                 </a-space>
@@ -129,8 +132,13 @@
     <a-modal v-model:open="caseVisible" title="案例详情" width="min(960px, 94vw)" :footer="null">
       <div v-if="selectedCase" class="case-detail">
         <div class="detail-label">Prompt</div><p>{{ selectedCase.prompt }}</p>
-        <a-alert v-if="selectedCase.status === 'rejected'" type="error" show-icon message="审核退回原因" :description="selectedCase.rejectionReason" />
-        <div class="detail-label">版本</div><p>第 {{ selectedCase.revisionNumber || 1 }} 版</p>
+        <a-alert v-if="selectedCase.status === 'withdrawn'" type="warning" show-icon message="管理员撤回原因" :description="selectedCase.withdrawnReason" />
+        <div class="detail-label">错误类型</div>
+        <p>{{ taxonomyText(selectedCase.errorTypes, selectedCase.errorType || selectedCase.category, ERROR_TYPE_OPTIONS, selectedCase.errorTypeOther) }}</p>
+        <div class="detail-label">知识场景</div>
+        <p>{{ taxonomyText(selectedCase.knowledgeScenarios, '', KNOWLEDGE_SCENARIO_OPTIONS, selectedCase.knowledgeScenarioOther) }}</p>
+        <div class="detail-label">来源问题</div>
+        <p>{{ taxonomyText(selectedCase.sourceIssues, '', SOURCE_ISSUE_OPTIONS, selectedCase.sourceIssueOther) }}</p>
         <div class="detail-label">AI 回复与批注</div>
         <AnnotationEditor :text="selectedCase.aiAnswer" :model-value="selectedCase.annotations || []" readonly />
         <div v-if="selectedCase.note" class="overall-note"><strong>整体说明</strong><p>{{ selectedCase.note }}</p></div>
@@ -156,10 +164,10 @@ import dayjs from 'dayjs'
 import ConversationSidebar from '../../components/common/ConversationSidebar.vue'
 import AnnotationEditor from '../../components/cases/AnnotationEditor.vue'
 import { useAuthStore } from '../../store/auth'
-import { getMySubmissions, deleteSubmission } from '../../api/submission'
+import { deleteCaseDraft, deleteSubmission, getMySubmissions, getSavedCaseDrafts } from '../../api/submission'
 import { getDiaries, createDiary, updateDiary, deleteDiary } from '../../api/diary'
 import { changePassword } from '../../api/auth'
-import { CASE_CATEGORIES, PLATFORM_OPTIONS, optionLabel } from '../../constants/options'
+import { ERROR_TYPE_OPTIONS, KNOWLEDGE_SCENARIO_OPTIONS, PLATFORM_OPTIONS, SOURCE_ISSUE_OPTIONS, optionLabel, platformLabel } from '../../constants/options'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -191,12 +199,20 @@ const caseColumns = [
   { title: '批注', dataIndex: 'annotationCount', width: 80 },
   { title: '状态', key: 'status', width: 90 },
   { title: '提交时间', dataIndex: 'createdAt', width: 180 },
-  { title: '操作', key: 'actions', width: 120 },
+  { title: '操作', key: 'actions', width: 180 },
 ]
 
 async function loadData() {
-  const [caseRes, diaryRes] = await Promise.all([getMySubmissions(), getDiaries()])
-  submissions.value = caseRes.data.list || []
+  const [caseRes, draftRes, diaryRes] = await Promise.all([getMySubmissions(), getSavedCaseDrafts(), getDiaries()])
+  const drafts = (draftRes.data || []).map(item => ({
+    ...item.payload,
+    id: item.id,
+    status: 'draft',
+    isEditorDraft: true,
+    createdAt: item.updatedAt,
+    annotationCount: item.payload?.annotations?.length || 0,
+  }))
+  submissions.value = [...drafts, ...(caseRes.data.list || [])]
   diaries.value = diaryRes.data.list || []
   diaryProgress.value = diaryRes.data.progress || []
   stats[0].value = caseRes.data.stats?.total || 0
@@ -238,16 +254,22 @@ async function saveDiary() {
 }
 
 async function removeDiary(id) { await deleteDiary(id); await loadData() }
-function convertDiary(record) { router.push({ path: '/gallery', query: { submit: '1', diaryId: record.id } }) }
+function convertDiary(record) { router.push({ path: '/cases/new', query: { diaryId: record.id } }) }
 async function removeCase(id) { await deleteSubmission(id); await loadData() }
+async function removeDraft(id) { await deleteCaseDraft(id); await loadData() }
+function continueDraft(record) { router.push({ path: '/cases/new', query: { draftId: record.id } }) }
 
 const caseVisible = ref(false)
 const selectedCase = ref(null)
 function openCase(record) { selectedCase.value = record; caseVisible.value = true }
-function reviseCase(record) { router.push({ path: '/gallery', query: { submit: '1', revisionId: record.id } }) }
-function categoryLabel(value) { return optionLabel(CASE_CATEGORIES, value) }
-function statusLabel(value) { return ({ submitted: '待审核', published: '已发布', rejected: '未通过', draft: '草稿' })[value] || value }
-function statusColor(value) { return ({ submitted: 'orange', published: 'green', rejected: 'red', draft: 'default' })[value] }
+function categoryLabel(value) { return optionLabel(ERROR_TYPE_OPTIONS, value) }
+function taxonomyText(values, fallback, options, otherText = '') {
+  const selected = Array.isArray(values) && values.length ? values : fallback ? [fallback] : []
+  return selected.map(value => value === 'other' && otherText ? `其他：${otherText}` : optionLabel(options, value)).join('、') || '未标注'
+}
+function displayPlatform(record) { return platformLabel(record.platform, record.platformOther) }
+function statusLabel(value) { return ({ submitted: '旧待审核记录', published: '已发布', rejected: '旧退回记录', withdrawn: '已撤回', draft: '草稿' })[value] || value }
+function statusColor(value) { return ({ submitted: 'orange', published: 'green', rejected: 'red', withdrawn: 'default', draft: 'default' })[value] }
 
 const passwordVisible = ref(false)
 const passwordForm = reactive({ currentPassword: '', newPassword: '' })

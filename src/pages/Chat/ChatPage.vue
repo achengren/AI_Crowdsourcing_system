@@ -22,9 +22,13 @@
               <div v-if="msg.content">{{ msg.content }}</div>
             </div>
             <div class="message-text markdown-body" v-else v-html="renderMd(msg.content)"></div>
-            <div class="message-actions" v-if="msg.role === 'ai'">
+            <div class="message-actions" v-if="msg.role === 'ai' && msg.id">
               <a-tag v-if="msg.model" color="default">{{ msg.model }}</a-tag>
-              <a-rate v-model:value="msg.rating" :count="5" size="small" @change="onRate(msg, $event)" />
+              <span class="rating-label">回答满意度</span>
+              <a-tooltip title="1 星表示非常不满意，5 星表示非常满意。评分只用于课程分析，不影响案例提交。">
+                <QuestionCircleOutlined class="rating-help" />
+              </a-tooltip>
+              <a-rate v-model:value="msg.rating" :count="5" :allow-clear="false" :disabled="msg.ratingSaving" size="small" @change="onRate(msg, $event)" />
               <template v-if="msg.qualityFlag && msg.qualityFlag.isLowQuality">
                 <a-tag color="warning" class="quality-tag">
                   <ExclamationCircleOutlined /> 可能存在信息缺失
@@ -114,9 +118,9 @@
 import { ref, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { SendOutlined, PictureOutlined, CloseOutlined, ExclamationCircleOutlined, UploadOutlined, BulbOutlined } from '@ant-design/icons-vue'
+import { SendOutlined, PictureOutlined, CloseOutlined, ExclamationCircleOutlined, UploadOutlined, BulbOutlined, QuestionCircleOutlined } from '@ant-design/icons-vue'
 import ConversationSidebar from '../../components/common/ConversationSidebar.vue'
-import { sendMessage, getConversations, getMessages, getSolutionSuggestion } from '../../api/chat'
+import { sendMessage, getConversations, getMessages, getSolutionSuggestion, rateMessage } from '../../api/chat'
 import { uploadImage } from '../../api/submission'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -175,7 +179,8 @@ async function loadConversation(convId) {
         role: m.role === 'assistant' ? 'ai' : 'user',
         content: parsed.text,
         imageUrl: parsed.imageUrl,
-        rating: 0,
+        rating: Number(m.rating || 0),
+        savedRating: Number(m.rating || 0),
         qualityFlag: m.qualityFlag || null,
         provider: m.provider,
         model: m.model,
@@ -223,6 +228,7 @@ async function onSend() {
       role: 'ai',
       content: res.data.reply,
       rating: 0,
+      savedRating: 0,
       provider: res.data.provider,
       model: res.data.model,
       modality: res.data.modality,
@@ -266,10 +272,19 @@ function parseMsgContent(raw) {
   return { imageUrl: '', text: raw }
 }
 
-function onRate(msg, value) {
+async function onRate(msg, value) {
+  const previous = Number(msg.savedRating || 0)
   msg.rating = value
-  if (value <= 3) {
-    message.info('已标记为低满意度回答，可在"提交案例"中记录')
+  msg.ratingSaving = true
+  try {
+    await rateMessage(activeConvId.value, msg.id, value)
+    msg.savedRating = value
+    message.success('满意度已保存')
+  } catch (error) {
+    msg.rating = previous
+    message.error(error.response?.data?.message || '评分保存失败')
+  } finally {
+    msg.ratingSaving = false
   }
 }
 
@@ -284,10 +299,10 @@ function onSubmitCase(aiMsg, aiIndex) {
     }
   }
   const query = aiMsg.id
-    ? { submit: '1', messageId: aiMsg.id, satisfaction: aiMsg.rating || 0 }
-    : { submit: '1', prompt: userContent, aiAnswer: aiMsg.content, satisfaction: aiMsg.rating || 0 }
+    ? { messageId: aiMsg.id }
+    : { prompt: userContent, aiAnswer: aiMsg.content }
   if (userImageUrl) query.imageUrl = userImageUrl
-  router.push({ path: '/gallery', query })
+  router.push({ path: '/cases/new', query })
 }
 
 async function onGetSuggestion(aiMsg, aiIndex) {
@@ -432,6 +447,8 @@ async function scrollToBottom() {
   border-color: var(--hib-red);
   box-shadow: 0 0 0 3px rgba(173, 70, 82, 0.1), 0 7px 20px rgba(55, 39, 42, .06);
 }
+.rating-label { margin-left: 2px; color: var(--hib-muted); font-size: 12px; }
+.rating-help { color: #9aa09c; cursor: help; }
 
 .chat-input-inner :deep(.ant-input) {
   border: none !important;

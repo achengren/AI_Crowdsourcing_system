@@ -16,6 +16,14 @@ export function getMessages(conversationId) {
   return client.get(`/conversations/${conversationId}/messages`)
 }
 
+export function updateConversationTitle(conversationId, title) {
+  return client.patch(`/conversations/${conversationId}/title`, { title })
+}
+
+export function rateMessage(conversationId, messageId, score) {
+  return client.put(`/conversations/${conversationId}/messages/${messageId}/rating`, { score })
+}
+
 export function getSolutionSuggestion(prompt, reply) {
   return client.post('/chat/solution-suggestion', { prompt, reply })
 }

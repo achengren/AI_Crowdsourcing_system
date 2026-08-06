@@ -16,24 +16,14 @@
             style="width: 280px"
             @search="onSearch"
           />
-          <a-select
-            v-model:value="filterCategory"
-            placeholder="按分类筛选"
-            style="width: 180px"
-            allow-clear
-            @change="onFilter"
-          >
-            <a-select-option value="campus_info">校园信息缺失</a-select-option>
-            <a-select-option value="news">最新新闻/时事</a-select-option>
-            <a-select-option value="domain_knowledge">特定领域知识</a-select-option>
-            <a-select-option value="unreliable_source">参考来源不可信</a-select-option>
-            <a-select-option value="unverifiable">信息来源不可验证</a-select-option>
-            <a-select-option value="no_source">无法提供参考来源</a-select-option>
-            <a-select-option value="image_understanding">图片理解失败</a-select-option>
-            <a-select-option value="database_query">特定数据库查询</a-select-option>
-            <a-select-option value="login_required">需要登录网站</a-select-option>
-            <a-select-option value="interaction_unsatisfied">对交互不满意</a-select-option>
-            <a-select-option value="workflow">工作流不匹配</a-select-option>
+          <a-select v-model:value="filterErrorType" placeholder="错误类型" style="width: 170px" allow-clear @change="onFilter">
+            <a-select-option v-for="item in ERROR_TYPE_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
+          </a-select>
+          <a-select v-model:value="filterScenario" placeholder="知识场景" style="width: 170px" allow-clear @change="onFilter">
+            <a-select-option v-for="item in KNOWLEDGE_SCENARIO_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
+          </a-select>
+          <a-select v-model:value="filterSourceIssue" placeholder="来源问题" style="width: 170px" allow-clear @change="onFilter">
+            <a-select-option v-for="item in SOURCE_ISSUE_OPTIONS.filter(option => option.value !== 'none')" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
           </a-select>
         </div>
         <a-radio-group v-model:value="sortBy" @change="onSort" size="small">
@@ -57,8 +47,8 @@
           class="case-card"
         >
           <div class="case-card-top">
-            <a-tag :color="categoryColor(item.category)">{{ categoryLabel(item.category) }}</a-tag>
-            <a-tag>{{ item.platform }}</a-tag>
+            <a-tag v-for="type in taxonomyValues(item.errorTypes, item.errorType || item.category)" :key="type" :color="categoryColor(type)">{{ taxonomyLabel(ERROR_TYPE_OPTIONS, type, item.errorTypeOther) }}</a-tag>
+            <a-tag>{{ displayPlatform(item) }}</a-tag>
             <span v-if="item.images?.length" class="card-img-badge"><PictureOutlined /> {{ item.images.length }}</span>
           </div>
 
@@ -75,19 +65,19 @@
           <div class="case-card-footer">
             <span class="case-author">{{ item.author }}</span>
             <a-space>
-              <span class="action-btn" title="片段批注" @click.stop="openDetail(item)">
+              <span class="action-btn" title="查看片段批注" @click.stop="openDetail(item, 'annotations')">
                 <HighlightOutlined />
                 {{ item.annotationCount || 0 }}
               </span>
-              <span class="action-btn" title="批注赞成票" @click.stop="openDetail(item)">
+              <span class="action-btn" title="查看批注投票" @click.stop="openDetail(item, 'annotations')">
                 <CheckOutlined />
                 {{ item.annotationAgreeCount || 0 }}
               </span>
-              <span class="action-btn" title="批注反对票" @click.stop="openDetail(item)">
+              <span class="action-btn" title="查看批注投票" @click.stop="openDetail(item, 'annotations')">
                 <CloseOutlined />
                 {{ item.annotationDisagreeCount || 0 }}
               </span>
-              <span class="action-btn" title="批注评论" @click.stop="openDetail(item)">
+              <span class="action-btn" title="查看批注讨论" @click.stop="openDetail(item, 'comments')">
                 <CommentOutlined />
                 {{ item.annotationCommentCount || 0 }}
               </span>
@@ -108,6 +98,26 @@
         />
       </div>
     </div>
+
+    <a-modal v-model:open="draftPickerVisible" title="新建案例" width="620px" :footer="null">
+      <div class="draft-picker-head">
+        <div><strong>已有 {{ caseDrafts.length }} 份草稿</strong><p>可以继续其中一份，也可以创建互不影响的新案例。</p></div>
+        <a-button type="primary" @click="startNewCase"><PlusOutlined />新建空白案例</a-button>
+      </div>
+      <a-spin :spinning="draftsLoading">
+        <div class="draft-list">
+          <div v-for="draft in caseDrafts" :key="draft.id" class="draft-row">
+            <button type="button" class="draft-content" @click="continueDraft(draft.id)">
+              <strong>{{ draft.payload?.prompt || '未命名案例草稿' }}</strong>
+              <span>{{ displayDraftPlatform(draft) }} · {{ formatDraftTime(draft.updatedAt) }}</span>
+            </button>
+            <a-popconfirm title="确定删除这份草稿？" ok-text="删除" cancel-text="取消" @confirm="removeDraft(draft.id)">
+              <a-button type="text" danger title="删除草稿" aria-label="删除草稿"><DeleteOutlined /></a-button>
+            </a-popconfirm>
+          </div>
+        </div>
+      </a-spin>
+    </a-modal>
 
     <!-- 提交案例弹窗 -->
     <a-modal
@@ -240,15 +250,20 @@
     <a-modal
       v-model:open="detailVisible"
       title="案例详情"
-      width="min(980px, 94vw)"
+      width="min(1280px, 96vw)"
       :footer="null"
       @cancel="detailVisible = false"
     >
       <div v-if="detailCase">
-        <div style="margin-bottom: 12px">
-          <a-tag :color="categoryColor(detailCase.category)">{{ categoryLabel(detailCase.category) }}</a-tag>
-          <a-tag>{{ detailCase.platform }}</a-tag>
-          <span style="color: #999; margin-left: 8px">{{ detailCase.author }} · {{ detailCase.createdAt }}</span>
+        <div class="detail-taxonomy">
+          <span class="taxonomy-label">错误类型</span>
+          <a-tag v-for="type in taxonomyValues(detailCase.errorTypes, detailCase.errorType || detailCase.category)" :key="`error-${type}`" :color="categoryColor(type)">{{ taxonomyLabel(ERROR_TYPE_OPTIONS, type, detailCase.errorTypeOther) }}</a-tag>
+          <span class="taxonomy-label">知识场景</span>
+          <a-tag v-for="scenario in detailCase.knowledgeScenarios || []" :key="`scenario-${scenario}`">{{ taxonomyLabel(KNOWLEDGE_SCENARIO_OPTIONS, scenario, detailCase.knowledgeScenarioOther) }}</a-tag>
+          <span v-if="detailCase.sourceIssues?.length" class="taxonomy-label">来源问题</span>
+          <a-tag v-for="issue in detailCase.sourceIssues || []" :key="`source-${issue}`" color="orange">{{ taxonomyLabel(SOURCE_ISSUE_OPTIONS, issue, detailCase.sourceIssueOther) }}</a-tag>
+          <a-tag>{{ displayPlatform(detailCase) }}</a-tag>
+          <span class="detail-meta">{{ detailCase.author }} · {{ detailCase.createdAt }}</span>
         </div>
         <div class="detail-section">
           <div class="detail-section-title">Prompt</div>
@@ -285,59 +300,27 @@
             {{ detailAnswerCollapsed ? '展开全部' : '收起' }}
           </a-button>
         </div>
-        <div class="detail-section">
-          <div class="detail-section-title">片段批注与讨论</div>
+        <div class="detail-section annotation-compose-section">
+          <div class="section-heading-line"><div><span>ADD ANNOTATION</span><h3>补充批注</h3></div><p>选择 AI 回复中的具体语句，提交新的判断。</p></div>
           <AnnotationEditor
             :text="detailCase.aiAnswer"
             :model-value="detailCase.annotations || []"
             :creating="annotationCreating"
-            :active-annotation-id="selectedAnnotation?.id || ''"
             readonly
             collaborative
-            discussion
+            composer-only
             @create-annotation="onCreateDetailAnnotation"
-            @vote="onVoteAnnotation"
-            @withdraw="onWithdrawAnnotation"
-            @select-annotation="onSelectAnnotation"
           />
         </div>
-        <section v-if="selectedAnnotation" class="annotation-thread">
-          <header>
-            <div><span>批注讨论</span><strong>{{ selectedAnnotation.issueType }}</strong></div>
-            <small>{{ selectedAnnotation.author }}</small>
-          </header>
-          <blockquote>“{{ selectedAnnotation.selectedText }}”</blockquote>
-          <a-list v-if="annotationComments.length || annotationCommentsLoading" :data-source="annotationComments" size="small" :loading="annotationCommentsLoading">
-            <template #renderItem="{ item: c }">
-              <a-list-item class="thread-comment">
-                <div class="thread-comment-body">
-                  <div class="thread-comment-head">
-                    <strong>{{ c.author }}</strong>
-                    <a-space v-if="c.canManage && editingCommentId !== c.id" size="small">
-                      <a-button type="text" size="small" aria-label="编辑评论" title="编辑评论" @click="startEditComment(c)"><EditOutlined /></a-button>
-                      <a-popconfirm title="确定删除这条评论？" ok-text="删除" cancel-text="取消" @confirm="onDeleteAnnotationComment(c)">
-                        <a-button type="text" danger size="small" aria-label="删除评论" title="删除评论"><DeleteOutlined /></a-button>
-                      </a-popconfirm>
-                    </a-space>
-                  </div>
-                  <template v-if="editingCommentId === c.id">
-                    <a-textarea v-model:value="editingCommentText" :rows="2" :maxlength="4000" />
-                    <a-space class="thread-edit-actions">
-                      <a-button size="small" @click="cancelEditComment">取消</a-button>
-                      <a-button type="primary" size="small" :loading="commentMutating" @click="onSaveAnnotationComment(c)">保存</a-button>
-                    </a-space>
-                  </template>
-                  <p v-else>{{ c.content }}</p>
-                </div>
-              </a-list-item>
-            </template>
-          </a-list>
-          <a-empty v-else description="暂无评论" />
-          <div class="thread-composer">
-            <a-textarea v-model:value="annotationCommentText" :rows="2" placeholder="围绕这条批注发表评论" />
-            <a-button type="primary" :loading="annotationCommentSending" aria-label="发送批注评论" title="发送批注评论" @click="onSendAnnotationComment"><SendOutlined /></a-button>
-          </div>
-        </section>
+        <div ref="annotationSection" class="detail-section annotation-discussion-section">
+          <AnnotationDiscussion
+            :case-id="detailCase.id"
+            :annotations="detailCase.annotations || []"
+            @vote="onVoteAnnotation"
+            @withdraw="onWithdrawAnnotation"
+            @comment-count-change="onAnnotationCommentCountChange"
+          />
+        </div>
         <div class="detail-section" v-if="detailCase.images?.length">
           <div class="detail-section-title">相关截图</div>
           <div class="detail-images">
@@ -377,14 +360,15 @@
 </template>
 
 <script setup>
-import { reactive, ref, onMounted, onActivated, watch } from 'vue'
+import { reactive, ref, onMounted, onActivated, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { CheckOutlined, CloseOutlined, CommentOutlined, CopyOutlined, DeleteOutlined, DownOutlined, EditOutlined, FileTextOutlined, HighlightOutlined, InboxOutlined, PictureOutlined, PlusOutlined, ScanOutlined, SendOutlined, UpOutlined } from '@ant-design/icons-vue'
+import { CheckOutlined, CloseOutlined, CommentOutlined, CopyOutlined, DeleteOutlined, DownOutlined, FileTextOutlined, HighlightOutlined, InboxOutlined, PictureOutlined, PlusOutlined, ScanOutlined, UpOutlined } from '@ant-design/icons-vue'
 import ConversationSidebar from '../../components/common/ConversationSidebar.vue'
 import AnnotationEditor from '../../components/cases/AnnotationEditor.vue'
-import { addAnnotationComment, addCaseAnnotation, deleteAnnotationComment, getAnnotationComments, getCaseDraftFromDiary, getCaseDraftFromMessage, getCaseDraftFromRevision, getCases, getComments, importConversationScreenshots, importConversationText, parseLink, submitCase, updateAnnotationComment, uploadImage, voteCaseAnnotation, withdrawCaseAnnotation } from '../../api/submission'
-import { CASE_CATEGORIES, PLATFORM_OPTIONS, optionLabel } from '../../constants/options'
+import AnnotationDiscussion from '../../components/cases/AnnotationDiscussion.vue'
+import { addCaseAnnotation, deleteCaseDraft, getCaseDraftFromDiary, getCaseDraftFromMessage, getCaseDraftFromRevision, getCases, getComments, getSavedCaseDrafts, importConversationScreenshots, importConversationText, parseLink, submitCase, uploadImage, voteCaseAnnotation, withdrawCaseAnnotation } from '../../api/submission'
+import { CASE_CATEGORIES, ERROR_TYPE_OPTIONS, KNOWLEDGE_SCENARIO_OPTIONS, PLATFORM_OPTIONS, SOURCE_ISSUE_OPTIONS, optionLabel, platformLabel } from '../../constants/options'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 
@@ -394,44 +378,10 @@ const route = useRoute()
 // 从 URL query 参数打开提交案例弹窗
 async function openSubmitFromQuery() {
   if (route.query.submit === '1') {
-    resetForm()
-    if (route.query.messageId) {
-      const res = await getCaseDraftFromMessage(route.query.messageId)
-      Object.assign(form, res.data)
-      platformLocked.value = true
-    } else if (route.query.diaryId) {
-      const res = await getCaseDraftFromDiary(route.query.diaryId)
-      Object.assign(form, res.data)
-      platformLocked.value = Boolean(res.data.platformLocked)
-    } else if (route.query.revisionId) {
-      const res = await getCaseDraftFromRevision(route.query.revisionId)
-      Object.assign(form, res.data)
-      platformLocked.value = Boolean(res.data.platformLocked)
-    } else {
-      form.prompt = route.query.prompt || ''
-      form.aiAnswer = route.query.aiAnswer || ''
-    }
-    form.satisfaction = Number(route.query.satisfaction || 0)
-    form.category = undefined
-    parsedFiles.value = []
-    uploadFileList.value = []
-    linkUrl.value = ''
-    for (const [index, url] of form.images.entries()) {
-      uploadFileList.value.push({ uid: `source-${index}`, name: '对话图片', status: 'done', url, thumbUrl: url })
-    }
-    if (route.query.imageUrl) {
-      form.images.push(route.query.imageUrl)
-      uploadFileList.value.push({
-        uid: 'chat-img',
-        name: '对话图片',
-        status: 'done',
-        url: route.query.imageUrl,
-        thumbUrl: route.query.imageUrl,
-      })
-    }
-    isFromChat.value = true
-    showSubmitModal.value = true
-    router.replace({ query: {} })
+    const query = { ...route.query }
+    delete query.submit
+    delete query.satisfaction
+    await router.replace({ path: '/cases/new', query })
   }
 }
 
@@ -447,7 +397,9 @@ watch(() => route.query.submit, (val) => {
 
 // 列表
 const search = ref('')
-const filterCategory = ref(undefined)
+const filterErrorType = ref(undefined)
+const filterScenario = ref(undefined)
+const filterSourceIssue = ref(undefined)
 const sortBy = ref('latest')
 const loading = ref(false)
 const cases = ref([])
@@ -455,7 +407,7 @@ const page = ref(1)
 const pageSize = ref(12)
 const total = ref(0)
 
-onMounted(() => loadCases())
+onMounted(() => { loadCases(); openSubmitFromQuery() })
 
 async function loadCases() {
   loading.value = true
@@ -463,7 +415,9 @@ async function loadCases() {
     const res = await getCases({
       page: page.value,
       pageSize: pageSize.value,
-      category: filterCategory.value,
+      errorType: filterErrorType.value,
+      knowledgeScenario: filterScenario.value,
+      sourceIssue: filterSourceIssue.value,
       keyword: search.value,
       sortBy: sortBy.value,
     })
@@ -516,9 +470,42 @@ function resetForm() {
   formRef.value?.resetFields()
 }
 
-function openManualSubmit() {
-  resetForm()
-  showSubmitModal.value = true
+const draftPickerVisible = ref(false)
+const draftsLoading = ref(false)
+const caseDrafts = ref([])
+
+async function openManualSubmit() {
+  draftsLoading.value = true
+  try {
+    caseDrafts.value = (await getSavedCaseDrafts()).data || []
+    if (caseDrafts.value.length) draftPickerVisible.value = true
+    else startNewCase()
+  } finally { draftsLoading.value = false }
+}
+
+function startNewCase() {
+  draftPickerVisible.value = false
+  router.push({ path: '/cases/new', query: { new: Date.now().toString() } })
+}
+
+function continueDraft(id) {
+  draftPickerVisible.value = false
+  router.push({ path: '/cases/new', query: { draftId: id } })
+}
+
+async function removeDraft(id) {
+  await deleteCaseDraft(id)
+  caseDrafts.value = caseDrafts.value.filter(item => item.id !== id)
+  message.success('草稿已删除')
+}
+
+function displayDraftPlatform(draft) {
+  const payload = draft.payload || {}
+  return platformLabel(payload.platform, payload.platformOther) || '平台未填写'
+}
+
+function formatDraftTime(value) {
+  return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '尚未保存时间'
 }
 
 watch(showSubmitModal, (val) => {
@@ -640,26 +627,17 @@ const detailCase = ref(null)
 const detailComments = ref([])
 const detailPromptCollapsed = ref(true)
 const detailAnswerCollapsed = ref(true)
-const selectedAnnotation = ref(null)
-const annotationComments = ref([])
-const annotationCommentText = ref('')
 const annotationCreating = ref(false)
-const annotationCommentsLoading = ref(false)
-const annotationCommentSending = ref(false)
-const editingCommentId = ref('')
-const editingCommentText = ref('')
-const commentMutating = ref(false)
+const annotationSection = ref(null)
 
-function openDetail(item) {
+async function openDetail(item, focus = '') {
   detailCase.value = item
   detailVisible.value = true
   detailPromptCollapsed.value = true
   detailAnswerCollapsed.value = Boolean(item.aiAnswer?.length > 100)
-  selectedAnnotation.value = null
-  annotationComments.value = []
-  annotationCommentText.value = ''
-  cancelEditComment()
   loadDetailComments(item.id)
+  await nextTick()
+  if (focus) annotationSection.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 async function readConversationClipboard() {
@@ -722,7 +700,6 @@ async function onCreateDetailAnnotation(annotation) {
     detailCase.value.annotations = [...(detailCase.value.annotations || []), res.data]
     detailCase.value.annotationCount = Number(detailCase.value.annotationCount || 0) + 1
     message.success('批注已添加')
-    await onSelectAnnotation(res.data)
   } finally { annotationCreating.value = false }
 }
 
@@ -738,74 +715,21 @@ async function onVoteAnnotation(annotation, vote) {
   detailCase.value.annotationDisagreeCount = Math.max(0, Number(detailCase.value.annotationDisagreeCount || 0) + res.data.disagreeCount - previousDisagree)
 }
 
+function onAnnotationCommentCountChange(annotation, delta) {
+  annotation.commentCount = Math.max(0, Number(annotation.commentCount || 0) + delta)
+  detailCase.value.annotationCommentCount = Math.max(0, Number(detailCase.value.annotationCommentCount || 0) + delta)
+}
+
 async function onWithdrawAnnotation(annotation) {
   await withdrawCaseAnnotation(detailCase.value.id, annotation.id)
   detailCase.value.annotations = detailCase.value.annotations.filter(item => item.id !== annotation.id)
   detailCase.value.annotationCount = Math.max(0, Number(detailCase.value.annotationCount || 0) - 1)
-  if (selectedAnnotation.value?.id === annotation.id) selectedAnnotation.value = null
   message.success('批注已撤回，历史记录仍由系统保留')
-}
-
-async function onSelectAnnotation(annotation) {
-  selectedAnnotation.value = annotation
-  annotationCommentText.value = ''
-  cancelEditComment()
-  annotationCommentsLoading.value = true
-  try {
-    annotationComments.value = (await getAnnotationComments(detailCase.value.id, annotation.id)).data || []
-  } finally { annotationCommentsLoading.value = false }
-}
-
-async function onSendAnnotationComment() {
-  const content = annotationCommentText.value.trim()
-  if (!content || !selectedAnnotation.value) return
-  annotationCommentSending.value = true
-  try {
-    const res = await addAnnotationComment(detailCase.value.id, selectedAnnotation.value.id, { content })
-    annotationComments.value.push(res.data)
-    selectedAnnotation.value.commentCount = Number(selectedAnnotation.value.commentCount || 0) + 1
-    detailCase.value.annotationCommentCount = Number(detailCase.value.annotationCommentCount || 0) + 1
-    annotationCommentText.value = ''
-  } finally { annotationCommentSending.value = false }
-}
-
-function startEditComment(comment) {
-  editingCommentId.value = comment.id
-  editingCommentText.value = comment.content
-}
-
-function cancelEditComment() {
-  editingCommentId.value = ''
-  editingCommentText.value = ''
-}
-
-async function onSaveAnnotationComment(comment) {
-  const content = editingCommentText.value.trim()
-  if (!content) return message.warning('评论内容不能为空')
-  commentMutating.value = true
-  try {
-    const res = await updateAnnotationComment(detailCase.value.id, selectedAnnotation.value.id, comment.id, { content })
-    comment.content = res.data.content
-    cancelEditComment()
-    message.success('评论已更新')
-  } finally { commentMutating.value = false }
-}
-
-async function onDeleteAnnotationComment(comment) {
-  commentMutating.value = true
-  try {
-    await deleteAnnotationComment(detailCase.value.id, selectedAnnotation.value.id, comment.id)
-    annotationComments.value = annotationComments.value.filter(item => item.id !== comment.id)
-    selectedAnnotation.value.commentCount = Math.max(0, Number(selectedAnnotation.value.commentCount || 0) - 1)
-    detailCase.value.annotationCommentCount = Math.max(0, Number(detailCase.value.annotationCommentCount || 0) - 1)
-    if (editingCommentId.value === comment.id) cancelEditComment()
-    message.success('评论已删除')
-  } finally { commentMutating.value = false }
 }
 
 // 工具函数
 function categoryColor(c) {
-  const m = { campus_info: 'green', news: 'cyan', domain_knowledge: 'geekblue', unreliable_source: 'orange', unverifiable: 'orange', no_source: 'orange', image_understanding: 'purple', database_query: 'purple', login_required: 'purple', interaction_unsatisfied: 'red', workflow: 'red' }
+  const m = { factual_error: 'red', missing_information: 'gold', image_understanding_failure: 'purple', irrelevant_answer: 'volcano', reasoning_error: 'geekblue', misleading_expression: 'orange', capability_limitation: 'cyan', campus_info: 'green', news: 'cyan', domain_knowledge: 'geekblue', unreliable_source: 'orange', unverifiable: 'orange', no_source: 'orange', image_understanding: 'purple', database_query: 'purple', login_required: 'purple', interaction_unsatisfied: 'red', workflow: 'red' }
   return m[c] || 'default'
 }
 function renderMd(text) {
@@ -814,6 +738,20 @@ function renderMd(text) {
 
 function categoryLabel(c) {
   return optionLabel(CASE_CATEGORIES, c)
+}
+function errorTypeLabel(value) {
+  const label = optionLabel(ERROR_TYPE_OPTIONS, value)
+  return label === value ? categoryLabel(value) : label
+}
+function taxonomyValues(values, fallback) {
+  return Array.isArray(values) && values.length ? values : fallback ? [fallback] : []
+}
+function taxonomyLabel(options, value, otherText = '') {
+  if (value === 'other' && otherText) return `其他：${otherText}`
+  return optionLabel(options, value)
+}
+function displayPlatform(item) {
+  return platformLabel(item.platform, item.platformOther)
 }
 </script>
 
@@ -837,6 +775,15 @@ function categoryLabel(c) {
 .workspace-header small { color: var(--hib-muted); }
 
 .field-note { margin-top: 4px; color: #6b7280; font-size: 12px; }
+.draft-picker-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--hib-line); }
+.draft-picker-head p { margin: 5px 0 0; color: var(--hib-muted); font-size: 13px; }
+.draft-list { display: grid; gap: 8px; max-height: 430px; margin-top: 14px; overflow: auto; }
+.draft-row { display: grid; grid-template-columns: minmax(0, 1fr) 36px; align-items: center; gap: 8px; padding: 8px 8px 8px 14px; border: 1px solid var(--hib-line); background: #fff; }
+.draft-row:hover { border-color: #d7c3c5; background: #fdfafa; }
+.draft-content { min-width: 0; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.draft-content strong, .draft-content span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.draft-content strong { color: var(--hib-text); font-size: 14px; }
+.draft-content span { margin-top: 4px; color: var(--hib-muted); font-size: 12px; }
 .import-panel { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--hib-line); background: #fbfaf9; }
 .import-actions { display: flex; justify-content: space-between; gap: 8px; }
 .import-actions.end { justify-content: flex-end; }
@@ -853,6 +800,7 @@ function categoryLabel(c) {
 
 .toolbar-left {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   align-items: center;
 }
@@ -956,22 +904,15 @@ function categoryLabel(c) {
 
 .action-btn:hover { color: var(--hib-red); }
 
-.annotation-thread {
-  margin: 4px 0 18px;
-  padding: 16px 18px;
-  border: 1px solid var(--hib-line);
-  border-left: 3px solid var(--hib-red);
-  background: #fff;
-}
-.annotation-thread header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.annotation-thread header div { display: flex; align-items: center; gap: 10px; }
-.annotation-thread header span, .annotation-thread header small { color: var(--hib-muted); font-size: 12px; }
-.annotation-thread blockquote { margin: 12px 0 4px; padding-left: 12px; border-left: 2px solid var(--hib-line); color: #655e60; font-size: 13px; }
-.annotation-thread :deep(.ant-list-empty-text) { padding-block: 14px; }
-.thread-comment-body { width: 100%; min-width: 0; }
-.thread-comment-head { min-height: 30px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.thread-comment-head :deep(.ant-btn) { width: 28px; height: 28px; padding: 0; }
-.thread-comment-body p { margin: 4px 0 0; color: #4b4547; line-height: 1.6; white-space: pre-wrap; }
+.embedded-thread { margin-top: 11px; padding: 11px 12px 12px; border-left: 2px solid #eadcde; background: #fbf9f9; }
+.embedded-comments { display: grid; gap: 8px; }
+.embedded-comment { padding: 9px 10px; border-bottom: 1px solid #eee7e8; background: #fff; }
+.embedded-comment header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.embedded-comment header strong { font-size: 12px; color: #62585a; }
+.embedded-comment header :deep(.ant-btn) { width: 26px; height: 26px; padding: 0; }
+.embedded-comment p { margin: 5px 0 0; color: #4b4547; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.comment-expand { height: 24px; padding: 0; font-size: 12px; }
+.no-comments { padding: 5px 2px 2px; color: var(--hib-muted); font-size: 12px; }
 .thread-edit-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
 .thread-composer { display: grid; grid-template-columns: minmax(0, 1fr) 40px; align-items: end; gap: 8px; margin-top: 10px; }
 .thread-composer :deep(.ant-btn) { width: 40px; height: 40px; padding: 0; }
@@ -985,6 +926,13 @@ function categoryLabel(c) {
 .detail-section {
   margin-bottom: 16px;
 }
+
+.annotation-compose-section { margin-top: 26px; padding-top: 22px; border-top: 2px solid var(--hib-text); }
+.annotation-discussion-section { margin-top: 34px; }
+.section-heading-line { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 13px; }
+.section-heading-line span { color: var(--hib-red); font-size: 10px; }
+.section-heading-line h3 { margin: 3px 0 0; font-size: 20px; }
+.section-heading-line p { margin: 0; color: var(--hib-muted); font-size: 13px; }
 
 .detail-section-title {
   font-size: 13px;
@@ -1085,5 +1033,16 @@ function categoryLabel(c) {
   .toolbar, .toolbar-left { align-items: stretch; flex-direction: column; }
   .card-grid { grid-template-columns: minmax(0, 1fr); }
   .case-card { padding: 16px; }
+  .draft-picker-head { flex-direction: column; }
+  .detail-meta { width: 100%; margin-left: 0; }
+}
+.detail-taxonomy { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.taxonomy-label { margin-left: 5px; color: var(--hib-muted); font-size: 12px; }
+.taxonomy-label:first-child { margin-left: 0; }
+.detail-meta { margin-left: auto; color: var(--hib-muted); font-size: 12px; }
+.detail-section-title small { margin-left: 8px; color: var(--hib-muted); font-weight: 400; }
+@media (max-width: 760px) {
+  .detail-meta { width: 100%; margin-left: 0; }
+  .section-heading-line { align-items: flex-start; flex-direction: column; }
 }
 </style>

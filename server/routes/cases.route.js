@@ -6,6 +6,7 @@ import { writeAudit } from '../audit.js'
 import { annotationIntegrityError } from '../services/submissionIntegrity.js'
 import { canVoteOnAnnotation, canWithdrawAnnotation } from '../services/teachingPolicy.js'
 import { parseJson, toBoolean } from '../utils/data.js'
+import { ERROR_TYPES } from '../services/caseTaxonomy.js'
 
 const router = Router()
 router.use(authMiddleware)
@@ -14,7 +15,7 @@ const collaborativeAnnotationSchema = z.object({
   selectedText: z.string().min(1).max(10000),
   startOffset: z.number().int().nonnegative(),
   endOffset: z.number().int().positive(),
-  issueType: z.string().trim().min(1).max(64),
+  issueType: z.enum(ERROR_TYPES),
   comment: z.string().trim().min(1).max(4000),
 })
 const annotationVoteSchema = z.object({ vote: z.enum(['agree', 'disagree']) })
@@ -35,6 +36,9 @@ function mapCase(row) {
     liked: toBoolean(row.liked),
     tags: parseJson(row.tags, []),
     images: parseJson(row.images, []),
+    errorTypes: parseJson(row.errorTypes, row.errorType ? [row.errorType] : []),
+    knowledgeScenarios: parseJson(row.knowledgeScenarios, []),
+    sourceIssues: parseJson(row.sourceIssues, row.sourceIssue && row.sourceIssue !== 'none' ? [row.sourceIssue] : []),
     annotations: parseJson(row.annotations, []).map(mapAnnotation),
     annotationCount: Number(row.annotationCount || 0),
     annotationAgreeCount: Number(row.annotationAgreeCount || 0),
@@ -56,13 +60,25 @@ async function getPublishedAnnotation(caseId, annotationId) {
 }
 
 router.get('/', async (req, res) => {
-  const { category, keyword, sortBy = 'latest' } = req.query
+  const { category, errorType, knowledgeScenario, sourceIssue, keyword, sortBy = 'latest' } = req.query
   const page = Math.max(1, Number(req.query.page) || 1)
   const pageSize = Math.min(50, Math.max(1, Number(req.query.pageSize) || 12))
   const where = ["s.status = 'published'"]
   const params = []
 
-  if (category) { where.push('s.category = ?'); params.push(category) }
+  const selectedErrorType = errorType || category
+  if (selectedErrorType) {
+    where.push('JSON_CONTAINS(COALESCE(s.error_types, JSON_ARRAY(s.error_type)), JSON_QUOTE(?))')
+    params.push(selectedErrorType)
+  }
+  if (knowledgeScenario) {
+    where.push('JSON_CONTAINS(COALESCE(s.knowledge_scenarios, JSON_ARRAY()), JSON_QUOTE(?))')
+    params.push(knowledgeScenario)
+  }
+  if (sourceIssue) {
+    where.push("JSON_CONTAINS(COALESCE(s.source_issues, IF(s.source_issue = 'none', JSON_ARRAY(), JSON_ARRAY(s.source_issue))), JSON_QUOTE(?))")
+    params.push(sourceIssue)
+  }
   if (keyword) {
     where.push('(s.prompt LIKE ? OR s.note LIKE ? OR JSON_SEARCH(s.tags, \'one\', ?) IS NOT NULL)')
     const like = `%${keyword}%`
@@ -77,8 +93,12 @@ router.get('/', async (req, res) => {
       ? "COALESCE((SELECT SUM(LEAST(a.agree_count, a.disagree_count) * 2 + a.disagree_count) FROM case_annotations a WHERE a.submission_id = s.id AND a.status = 'active'), 0) DESC, s.created_at DESC"
       : 's.created_at DESC'
   const rows = await query(
-    `SELECT s.id, u.name AS author, s.prompt, s.platform, s.model, s.category,
-            s.ai_answer AS aiAnswer, s.satisfaction, s.is_good_case AS isGoodCase,
+    `SELECT s.id, u.name AS author, s.prompt, s.platform, s.platform_other AS platformOther,
+            s.model, s.category, s.error_type AS errorType, s.error_types AS errorTypes,
+            s.error_type_other AS errorTypeOther, s.knowledge_scenarios AS knowledgeScenarios,
+            s.knowledge_scenario_other AS knowledgeScenarioOther, s.source_issue AS sourceIssue,
+            s.source_issues AS sourceIssues, s.source_issue_other AS sourceIssueOther,
+            s.ai_answer AS aiAnswer,
             s.note, s.tags, s.images, s.like_count AS likeCount, s.comment_count AS commentCount,
             s.created_at AS createdAt,
             EXISTS(SELECT 1 FROM likes l WHERE l.case_id = s.id AND l.user_id = ?) AS liked,
@@ -216,31 +236,83 @@ router.get('/:id/annotations/:annotationId/comments', async (req, res) => {
   const annotation = await getPublishedAnnotation(req.params.id, req.params.annotationId)
   if (!annotation) return res.status(404).json({ message: '批注不存在' })
   const comments = await query(
-    `SELECT c.id, u.name AS author, c.content, c.created_at AS createdAt,
-            (c.user_id = ? OR ? = 'admin') AS canManage
+    `SELECT c.id, u.name AS author, c.content, c.parent_comment_id AS parentCommentId,
+            c.root_comment_id AS rootCommentId, pu.name AS replyToAuthor,
+            c.created_at AS createdAt, c.deleted_at AS deletedAt,
+            (c.deleted_at IS NULL AND (c.user_id = ? OR ? = 'admin')) AS canManage
      FROM annotation_comments c JOIN users u ON u.id = c.user_id
-     WHERE c.annotation_id = ? ORDER BY c.created_at ASC`,
+     LEFT JOIN annotation_comments pc ON pc.id = c.parent_comment_id
+     LEFT JOIN users pu ON pu.id = pc.user_id
+     LEFT JOIN annotation_comments rc ON rc.id = c.root_comment_id
+     WHERE c.annotation_id = ?
+       AND (c.deleted_at IS NULL OR EXISTS (
+         SELECT 1 FROM annotation_comments child
+         WHERE (child.parent_comment_id = c.id OR child.root_comment_id = c.id)
+           AND child.deleted_at IS NULL
+       ))
+     ORDER BY COALESCE(rc.created_at, c.created_at),
+              CASE WHEN c.parent_comment_id IS NULL THEN 0 ELSE 1 END,
+              c.created_at ASC`,
     [req.user.id, req.user.role, annotation.id]
   )
-  res.json({ code: 0, data: comments.map(item => ({ ...item, canManage: toBoolean(item.canManage) })) })
+  const mapped = comments.map(item => ({
+    ...item,
+    content: item.deletedAt ? '' : item.content,
+    canManage: toBoolean(item.canManage),
+    deleted: Boolean(item.deletedAt),
+    replies: [],
+  }))
+  const roots = []
+  const rootMap = new Map()
+  for (const item of mapped) {
+    if (!item.parentCommentId) {
+      roots.push(item)
+      rootMap.set(item.id, item)
+    }
+  }
+  for (const item of mapped) {
+    if (!item.parentCommentId) continue
+    const root = rootMap.get(item.rootCommentId) || rootMap.get(item.parentCommentId)
+    if (root) root.replies.push(item)
+    else roots.push(item)
+  }
+  res.json({ code: 0, data: roots })
 })
 
 router.post('/:id/annotations/:annotationId/comments', async (req, res) => {
   const content = String(req.body.content || '').trim()
+  const parentCommentId = req.body.parentCommentId ? String(req.body.parentCommentId) : null
   if (!content) return res.status(400).json({ message: '评论内容不能为空' })
   if (content.length > 4000) return res.status(400).json({ message: '评论内容不能超过 4000 字' })
   const annotation = await getPublishedAnnotation(req.params.id, req.params.annotationId)
   if (!annotation) return res.status(404).json({ message: '批注不存在' })
+  let parent = null
+  if (parentCommentId) {
+    parent = await one(
+      `SELECT c.id, c.root_comment_id AS rootCommentId, c.deleted_at AS deletedAt, u.name AS author
+       FROM annotation_comments c JOIN users u ON u.id = c.user_id
+       WHERE c.id = ? AND c.annotation_id = ?`,
+      [parentCommentId, annotation.id]
+    )
+    if (!parent || parent.deletedAt) return res.status(400).json({ message: '要回复的评论不存在或已删除' })
+  }
 
   const id = genId()
+  const rootCommentId = parent ? parent.rootCommentId || parent.id : null
   await transaction(async connection => {
     await connection.execute(
-      'INSERT INTO annotation_comments (id, annotation_id, user_id, content) VALUES (?, ?, ?, ?)',
-      [id, annotation.id, req.user.id, content]
+      `INSERT INTO annotation_comments
+       (id, annotation_id, user_id, parent_comment_id, root_comment_id, content)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, annotation.id, req.user.id, parent?.id || null, rootCommentId, content]
     )
     await connection.execute('UPDATE case_annotations SET comment_count = comment_count + 1 WHERE id = ?', [annotation.id])
   })
-  res.json({ code: 0, data: { id, author: req.user.name, content, createdAt: new Date().toISOString(), canManage: true } })
+  res.json({ code: 0, data: {
+    id, author: req.user.name, content, parentCommentId: parent?.id || null,
+    rootCommentId, replyToAuthor: parent?.author || '', createdAt: new Date().toISOString(),
+    canManage: true, deleted: false, replies: [],
+  } })
 })
 
 router.put('/:id/annotations/:annotationId/comments/:commentId', async (req, res) => {
@@ -250,10 +322,11 @@ router.put('/:id/annotations/:annotationId/comments/:commentId', async (req, res
   const annotation = await getPublishedAnnotation(req.params.id, req.params.annotationId)
   if (!annotation) return res.status(404).json({ message: '批注不存在' })
   const comment = await one(
-    'SELECT id, user_id AS userId FROM annotation_comments WHERE id = ? AND annotation_id = ?',
+    'SELECT id, user_id AS userId, deleted_at AS deletedAt FROM annotation_comments WHERE id = ? AND annotation_id = ?',
     [req.params.commentId, annotation.id]
   )
   if (!comment) return res.status(404).json({ message: '评论不存在' })
+  if (comment.deletedAt) return res.status(400).json({ message: '已删除的评论不能修改' })
   if (comment.userId !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ message: '只能修改自己的评论' })
   await query('UPDATE annotation_comments SET content = ? WHERE id = ?', [content, comment.id])
   if (req.user.role === 'admin') await writeAudit(req.user.id, 'annotation-comment.update', 'annotation_comment', comment.id)
@@ -264,13 +337,26 @@ router.delete('/:id/annotations/:annotationId/comments/:commentId', async (req, 
   const annotation = await getPublishedAnnotation(req.params.id, req.params.annotationId)
   if (!annotation) return res.status(404).json({ message: '批注不存在' })
   const comment = await one(
-    'SELECT id, user_id AS userId FROM annotation_comments WHERE id = ? AND annotation_id = ?',
+    'SELECT id, user_id AS userId, deleted_at AS deletedAt FROM annotation_comments WHERE id = ? AND annotation_id = ?',
     [req.params.commentId, annotation.id]
   )
   if (!comment) return res.status(404).json({ message: '评论不存在' })
+  if (comment.deletedAt) return res.status(400).json({ message: '评论已经删除' })
   if (comment.userId !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ message: '只能删除自己的评论' })
   await transaction(async connection => {
-    await connection.execute('DELETE FROM annotation_comments WHERE id = ?', [comment.id])
+    const [replyRows] = await connection.execute(
+      'SELECT COUNT(1) AS total FROM annotation_comments WHERE (parent_comment_id = ? OR root_comment_id = ?) AND deleted_at IS NULL',
+      [comment.id, comment.id]
+    )
+    if (Number(replyRows[0]?.total || 0) > 0) {
+      await connection.execute(
+        `UPDATE annotation_comments
+         SET content = '', deleted_at = CURRENT_TIMESTAMP(3), deleted_by_user_id = ? WHERE id = ?`,
+        [req.user.id, comment.id]
+      )
+    } else {
+      await connection.execute('DELETE FROM annotation_comments WHERE id = ?', [comment.id])
+    }
     await connection.execute('UPDATE case_annotations SET comment_count = GREATEST(0, comment_count - 1) WHERE id = ?', [annotation.id])
   })
   if (req.user.role === 'admin') await writeAudit(req.user.id, 'annotation-comment.delete', 'annotation_comment', comment.id)
@@ -295,6 +381,8 @@ router.post('/:id/like', async (req, res) => {
 })
 
 router.get('/:id/comments', async (req, res) => {
+  const item = await getPublishedCase(req.params.id)
+  if (!item) return res.status(404).json({ message: '案例不存在或已撤回' })
   const comments = await query(
     `SELECT c.id, u.name AS author, c.content, c.created_at AS createdAt
      FROM comments c JOIN users u ON u.id = c.user_id
@@ -307,6 +395,8 @@ router.get('/:id/comments', async (req, res) => {
 router.post('/:id/comments', async (req, res) => {
   const content = String(req.body.content || '').trim()
   if (!content) return res.status(400).json({ message: '评论内容不能为空' })
+  const item = await getPublishedCase(req.params.id)
+  if (!item) return res.status(404).json({ message: '案例不存在或已撤回' })
   const id = genId()
   await transaction(async connection => {
     await connection.execute('INSERT INTO comments (id, case_id, user_id, content) VALUES (?, ?, ?, ?)', [id, req.params.id, req.user.id, content])

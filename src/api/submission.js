@@ -7,6 +7,10 @@ export function submitCase(data) {
 export const getCaseDraftFromMessage = id => client.get(`/submissions/draft/from-message/${id}`)
 export const getCaseDraftFromDiary = id => client.get(`/submissions/draft/from-diary/${id}`)
 export const getCaseDraftFromRevision = id => client.get(`/submissions/draft/from-revision/${id}`)
+export const getSavedCaseDraft = id => client.get(`/submissions/drafts/${id}`)
+export const getSavedCaseDrafts = () => client.get('/submissions/drafts')
+export const saveCaseDraft = data => client.post('/submissions/drafts', data)
+export const deleteCaseDraft = id => client.delete(`/submissions/drafts/${id}`)
 
 export function getMySubmissions(params) {
   return client.get('/submissions/my', { params })

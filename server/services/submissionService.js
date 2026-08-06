@@ -19,8 +19,8 @@ export async function calculateStats(userId) {
     `SELECT COUNT(1) AS total,
             SUM(created_at >= CURRENT_DATE()) AS todayCount,
             SUM(created_at >= ?) AS weekCount,
-            SUM(is_good_case = 1) AS goodCases,
-            ROUND(AVG(satisfaction), 1) AS avgSatisfaction
+            SUM(status = 'published') AS publishedCount,
+            SUM(status = 'withdrawn') AS withdrawnCount
      FROM submissions WHERE user_id = ?`,
     [getWeekRange(), userId]
   )
@@ -28,7 +28,7 @@ export async function calculateStats(userId) {
     total: Number(row.total || 0),
     todayCount: Number(row.todayCount || 0),
     weekCount: Number(row.weekCount || 0),
-    goodCases: Number(row.goodCases || 0),
-    avgSatisfaction: Number(row.avgSatisfaction || 0),
+    publishedCount: Number(row.publishedCount || 0),
+    withdrawnCount: Number(row.withdrawnCount || 0),
   }
 }

@@ -22,7 +22,21 @@
         :class="['conv-item', { active: conv.id === activeConvId }]"
         @click="onSelectConv(conv)"
       >
-        <span class="conv-title">{{ conv.title }}</span>
+        <a-input
+          v-if="editingId === conv.id"
+          v-model:value="editingTitle"
+          class="conv-title-input"
+          size="small"
+          :maxlength="50"
+          @click.stop
+          @press-enter.stop="saveTitle(conv)"
+          @keydown.esc.stop="cancelRename"
+          @blur="saveTitle(conv)"
+        />
+        <template v-else>
+          <span class="conv-title">{{ conv.title }}</span>
+          <a-button type="text" size="small" class="rename-btn" title="重命名对话" aria-label="重命名对话" @click.stop="startRename(conv)"><EditOutlined /></a-button>
+        </template>
       </div>
       <div v-if="!conversations.length" class="conv-empty">暂无对话</div>
     </div>
@@ -61,9 +75,10 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { CloseOutlined, FolderOutlined, MenuOutlined, PlusOutlined, SettingOutlined, UserOutlined } from '@ant-design/icons-vue'
+import { message } from 'ant-design-vue'
+import { CloseOutlined, EditOutlined, FolderOutlined, MenuOutlined, PlusOutlined, SettingOutlined, UserOutlined } from '@ant-design/icons-vue'
 import { useAuthStore } from '../../store/auth'
-import { getConversations } from '../../api/chat'
+import { getConversations, updateConversationTitle } from '../../api/chat'
 
 const router = useRouter()
 const route = useRoute()
@@ -71,6 +86,9 @@ const auth = useAuthStore()
 
 const conversations = ref([])
 const mobileOpen = ref(false)
+const editingId = ref('')
+const editingTitle = ref('')
+const renaming = ref(false)
 
 const currentRoute = computed(() => route.path)
 const activeConvId = computed(() => route.query.conv || null)
@@ -98,8 +116,37 @@ async function onNewChat() {
 }
 
 function onSelectConv(conv) {
+  if (editingId.value) return
   mobileOpen.value = false
   router.push({ path: '/chat', query: { conv: conv.id } })
+}
+
+function startRename(conv) {
+  editingId.value = conv.id
+  editingTitle.value = conv.title
+}
+
+function cancelRename() {
+  editingId.value = ''
+  editingTitle.value = ''
+}
+
+async function saveTitle(conv) {
+  if (editingId.value !== conv.id || renaming.value) return
+  const title = editingTitle.value.trim()
+  if (!title) {
+    message.warning('标题不能为空')
+    return
+  }
+  if (title === conv.title) return cancelRename()
+  renaming.value = true
+  try {
+    await updateConversationTitle(conv.id, title)
+    conv.title = title
+    cancelRename()
+  } catch (error) {
+    message.error(error.response?.data?.message || '标题保存失败')
+  } finally { renaming.value = false }
 }
 
 function navigate(path) {
@@ -233,6 +280,10 @@ function onLogout() {
 .sidebar-nav-item:hover {
   background: rgba(255,255,255,.08);
 }
+.rename-btn { width: 26px; min-width: 26px; height: 26px; padding: 0; color: #d8c4c1; opacity: 0; }
+.conv-item:hover .rename-btn, .conv-item.active .rename-btn { opacity: 1; }
+.rename-btn:hover { color: #fff !important; background: rgba(255,255,255,.1) !important; }
+.conv-title-input { min-width: 0; }
 
 .sidebar-nav-item.active {
   background: rgba(255,255,255,.16);

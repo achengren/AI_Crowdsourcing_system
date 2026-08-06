@@ -1,5 +1,5 @@
 <template>
-  <div class="annotation-editor" :class="{ readonly }">
+  <div class="annotation-editor" :class="{ readonly, discussion, 'composer-only': composerOnly }">
     <div class="annotation-layout">
       <div class="answer-pane">
         <div class="pane-heading">
@@ -23,28 +23,34 @@
 
       <aside class="comment-pane">
         <div class="pane-heading">
-          <span>批注</span>
-          <a-badge :count="modelValue.length" show-zero />
+          <span>{{ composerOnly ? '添加批注' : '批注' }}</span>
+          <a-badge v-if="!composerOnly" :count="modelValue.length" show-zero />
         </div>
 
         <div v-if="canAnnotate" :class="['comment-form', { empty: !selectionText }]">
           <blockquote>{{ selectionText || '尚未选择片段' }}</blockquote>
           <a-select v-model:value="draft.issueType" placeholder="本条批注的错误类型" style="width: 100%" :disabled="!selectionText">
-            <a-select-option v-for="type in ISSUE_TYPES" :key="type" :value="type">{{ type }}</a-select-option>
+            <a-select-option v-for="type in ISSUE_TYPES" :key="type.value" :value="type.value">{{ type.label }}</a-select-option>
           </a-select>
           <a-textarea v-model:value="draft.comment" :rows="3" placeholder="说明这段内容存在什么问题" :disabled="!selectionText" />
-          <a-alert type="warning" show-icon message="批注提交后不可修改，请确认所选原文、错误类型和说明准确。" />
+          <a-alert
+            :type="collaborative ? 'warning' : 'info'"
+            show-icon
+            :message="collaborative
+              ? '批注提交后立即公开且不可修改，请确认所选原文、错误类型和说明准确。'
+              : '发布前可删除并重新添加批注；案例发布后不可修改，请在发布前核对。'"
+          />
           <a-space>
             <a-button type="primary" size="small" :loading="creating" :disabled="!selectionText" @click="addAnnotation">添加批注</a-button>
             <a-button size="small" :disabled="!selectionText" @click="clearSelection">取消</a-button>
           </a-space>
         </div>
 
-        <div class="comment-list">
+        <div v-if="!composerOnly" class="comment-list">
           <div v-for="(item, index) in sortedAnnotations" :key="item.id || `${item.startOffset}-${index}`" class="comment-item">
             <div class="comment-meta">
               <a-tag :color="item.source === 'ai' ? 'gold' : 'blue'">{{ item.source === 'ai' ? 'AI 候选' : '人工批注' }}</a-tag>
-              <strong>{{ item.issueType }}</strong>
+              <strong>{{ issueTypeLabel(item.issueType) }}</strong>
               <a-tag v-if="item.status === 'withdrawn'">已撤回</a-tag>
               <span v-if="item.author" class="author">{{ item.author }}</span>
               <a-button v-if="!readonly && !collaborative" type="text" danger size="small" @click="removeAnnotation(item)">
@@ -60,13 +66,12 @@
               <a-button v-if="discussion" type="text" size="small" :disabled="item.isOwn" :title="item.isOwn ? '不能为自己的批注投票' : '反对这条批注'" :class="{ disagree: item.userVote === 'disagree' }" @click="vote(item, 'disagree')">
                 <CloseOutlined />反对 {{ item.disagreeCount || 0 }}
               </a-button>
-              <a-button v-if="discussion" type="text" size="small" :class="{ active: item.id === activeAnnotationId }" @click="selectAnnotation(item)">
-                <CommentOutlined />{{ item.commentCount || 0 }}
-              </a-button>
+              <span v-if="discussion" class="comment-count"><CommentOutlined />评论 {{ item.commentCount || 0 }}</span>
               <a-popconfirm v-if="item.isOwn || allowWithdraw" title="撤回后将不再公开展示，且保留历史记录。确定撤回？" ok-text="撤回" cancel-text="取消" @confirm="withdraw(item)">
                 <a-button type="text" danger size="small"><StopOutlined />撤回</a-button>
               </a-popconfirm>
             </div>
+            <slot v-if="discussion" name="discussion" :annotation="item"></slot>
           </div>
           <a-empty v-if="!modelValue.length" :description="canAnnotate ? '选择左侧文本开始批注' : '暂无片段批注'" />
         </div>
@@ -80,6 +85,7 @@ import { computed, reactive, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { CheckOutlined, CloseOutlined, CommentOutlined, DeleteOutlined, StopOutlined } from '@ant-design/icons-vue'
 import { ISSUE_TYPES } from '../../constants/options'
+import { optionLabel } from '../../constants/options'
 
 const props = defineProps({
   text: { type: String, default: '' },
@@ -87,6 +93,7 @@ const props = defineProps({
   readonly: { type: Boolean, default: false },
   collaborative: { type: Boolean, default: false },
   discussion: { type: Boolean, default: false },
+  composerOnly: { type: Boolean, default: false },
   creating: { type: Boolean, default: false },
   activeAnnotationId: { type: String, default: '' },
   allowWithdraw: { type: Boolean, default: false },
@@ -97,6 +104,7 @@ const selectionText = ref('')
 const selectionRange = ref(null)
 const draft = reactive({ issueType: undefined, comment: '' })
 const canAnnotate = computed(() => !props.readonly || props.collaborative)
+const issueTypeLabel = value => optionLabel(ISSUE_TYPES, value)
 
 const sortedAnnotations = computed(() => [...props.modelValue].sort((a, b) => a.startOffset - b.startOffset))
 const segments = computed(() => {
@@ -189,6 +197,8 @@ defineExpose({ clearSelection })
 <style scoped>
 .annotation-editor { border: 1px solid #d9d9d9; background: #fff; }
 .annotation-layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.8fr); min-height: 360px; }
+.annotation-editor.composer-only .annotation-layout { grid-template-columns: minmax(0, 1.45fr) minmax(340px, .75fr); }
+.annotation-editor.composer-only .comment-pane { background: #fbf9f9; }
 .answer-pane { min-width: 0; border-right: 1px solid #e8e8e8; }
 .pane-heading { height: 44px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #eee; font-weight: 600; background: #fafafa; }
 .selection-state { color: var(--hib-red); font-size: 12px; font-weight: 400; }
@@ -212,5 +222,6 @@ defineExpose({ clearSelection })
 .annotation-actions :deep(.ant-btn) { height: 28px; padding: 0 7px; color: var(--hib-muted); }
 .annotation-actions :deep(.ant-btn:hover), .annotation-actions :deep(.ant-btn.agree), .annotation-actions :deep(.ant-btn.active) { color: var(--hib-red); background: var(--hib-red-soft); }
 .annotation-actions :deep(.ant-btn.disagree) { color: #4b5563; background: #eef0f2; }
+.comment-count { display: inline-flex; align-items: center; gap: 4px; padding: 4px 7px; color: var(--hib-muted); font-size: 12px; }
 @media (max-width: 760px) { .annotation-layout { grid-template-columns: 1fr; } .answer-pane { border-right: 0; border-bottom: 1px solid #e8e8e8; } }
 </style>

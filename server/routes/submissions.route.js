@@ -9,6 +9,7 @@ import { checkDailyLimit, checkWeeklyLimit, calculateStats } from '../services/s
 import { annotationIntegrityError, extractUserMessage, lockSubmissionToMessage } from '../services/submissionIntegrity.js'
 import { parseJson, toBoolean } from '../utils/data.js'
 import { canDeleteSubmissionVersion } from '../services/teachingPolicy.js'
+import { ERROR_TYPES, KNOWLEDGE_SCENARIOS, SOURCE_ISSUES, caseTaxonomyError, normalizeCaseTaxonomy } from '../services/caseTaxonomy.js'
 
 const router = Router()
 const annotationSchema = z.object({
@@ -17,7 +18,7 @@ const annotationSchema = z.object({
   endOffset: z.number().int().positive(),
   prefixText: z.string().optional().default(''),
   suffixText: z.string().optional().default(''),
-  issueType: z.string().min(1),
+  issueType: z.enum(ERROR_TYPES),
   comment: z.string().min(1),
   source: z.enum(['user', 'ai']).optional().default('user'),
   confidence: z.number().min(0).max(1).nullable().optional(),
@@ -26,27 +27,44 @@ const annotationSchema = z.object({
 const submissionSchema = z.object({
   prompt: z.string().optional().default(''),
   platform: z.string().optional().default(''),
+  platformOther: z.string().trim().max(100).optional().default(''),
   model: z.string().optional().default(''),
-  category: z.string().min(1),
+  category: z.string().optional().default(''),
+  errorType: z.enum(ERROR_TYPES).optional().default('other'),
+  errorTypes: z.array(z.enum(ERROR_TYPES)).max(ERROR_TYPES.length).optional(),
+  errorTypeOther: z.string().trim().max(200).optional().default(''),
+  knowledgeScenarios: z.array(z.enum(KNOWLEDGE_SCENARIOS)).max(6).optional().default([]),
+  knowledgeScenarioOther: z.string().trim().max(200).optional().default(''),
+  sourceIssue: z.enum(SOURCE_ISSUES).optional().default('none'),
+  sourceIssues: z.array(z.enum(SOURCE_ISSUES)).max(SOURCE_ISSUES.length).optional(),
+  sourceIssueOther: z.string().trim().max(200).optional().default(''),
   aiAnswer: z.string().optional().default(''),
   shareLink: z.string().optional().default(''),
-  satisfaction: z.number().int().min(0).max(5).optional().default(0),
-  isGoodCase: z.boolean().optional().default(false),
   note: z.string().optional().default(''),
   tags: z.array(z.string()).optional().default([]),
   images: z.array(z.string()).optional().default([]),
   sourceMessageId: z.string().nullable().optional(),
   sourceDiaryId: z.string().nullable().optional(),
   revisionOfId: z.string().nullable().optional(),
+  draftId: z.string().nullable().optional(),
   annotations: z.array(annotationSchema).optional().default([]),
+})
+
+const draftRequestSchema = z.object({
+  id: z.string().length(32).optional(),
+  sourceMessageId: z.string().length(32).nullable().optional(),
+  sourceDiaryId: z.string().length(32).nullable().optional(),
+  payload: z.object({}).passthrough(),
 })
 
 function mapSubmission(row) {
   return {
     ...row,
-    isGoodCase: toBoolean(row.isGoodCase),
     tags: parseJson(row.tags, []),
     images: parseJson(row.images, []),
+    errorTypes: parseJson(row.errorTypes, row.errorType ? [row.errorType] : []),
+    knowledgeScenarios: parseJson(row.knowledgeScenarios, []),
+    sourceIssues: parseJson(row.sourceIssues, row.sourceIssue && row.sourceIssue !== 'none' ? [row.sourceIssue] : []),
     annotations: parseJson(row.annotations, []),
     annotationCount: Number(row.annotationCount || 0),
     revisionNumber: Number(row.revisionNumber || 1),
@@ -54,10 +72,63 @@ function mapSubmission(row) {
   }
 }
 
+router.get('/drafts', authMiddleware, async (req, res) => {
+  const rows = await query(
+    `SELECT id, source_message_id AS sourceMessageId, source_diary_id AS sourceDiaryId,
+            payload, created_at AS createdAt, updated_at AS updatedAt
+     FROM case_drafts WHERE user_id = ? ORDER BY updated_at DESC LIMIT 100`,
+    [req.user.id]
+  )
+  res.json({ code: 0, data: rows.map(item => ({ ...item, payload: parseJson(item.payload, {}) })) })
+})
+
+router.get('/drafts/:id', authMiddleware, async (req, res) => {
+  const item = await one(
+    `SELECT id, source_message_id AS sourceMessageId, source_diary_id AS sourceDiaryId,
+            payload, updated_at AS updatedAt
+     FROM case_drafts WHERE id = ? AND user_id = ?`,
+    [req.params.id, req.user.id]
+  )
+  if (!item) return res.status(404).json({ message: '草稿不存在' })
+  res.json({ code: 0, data: { ...item, payload: parseJson(item.payload, {}) } })
+})
+
+router.post('/drafts', authMiddleware, async (req, res) => {
+  const parsed = draftRequestSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ message: '草稿内容无效' })
+  const { sourceMessageId = null, sourceDiaryId = null, payload } = parsed.data
+  let id = parsed.data.id
+  if (id) {
+    const result = await query(
+      `UPDATE case_drafts SET source_message_id = ?, source_diary_id = ?, payload = ?
+       WHERE id = ? AND user_id = ?`,
+      [sourceMessageId, sourceDiaryId, JSON.stringify(payload), id, req.user.id]
+    )
+    if (!result.affectedRows) return res.status(404).json({ message: '草稿不存在或无权操作' })
+  } else {
+    id = genId()
+    await query(
+      `INSERT INTO case_drafts (id, user_id, source_message_id, source_diary_id, payload)
+       VALUES (?, ?, ?, ?, ?)`,
+      [id, req.user.id, sourceMessageId, sourceDiaryId, JSON.stringify(payload)]
+    )
+  }
+  res.json({ code: 0, data: { id, updatedAt: new Date().toISOString() } })
+})
+
+router.delete('/drafts/:id', authMiddleware, async (req, res) => {
+  await query('DELETE FROM case_drafts WHERE id = ? AND user_id = ?', [req.params.id, req.user.id])
+  res.json({ code: 0, data: null })
+})
+
 router.get('/draft/from-revision/:submissionId', authMiddleware, async (req, res) => {
   const item = await one(
-    `SELECT id, prompt, platform, model, category, ai_answer AS aiAnswer, share_link AS shareLink,
-            satisfaction, is_good_case AS isGoodCase, note, tags, images,
+    `SELECT id, prompt, platform, platform_other AS platformOther, model, category,
+            error_type AS errorType, error_types AS errorTypes, error_type_other AS errorTypeOther,
+            knowledge_scenarios AS knowledgeScenarios, knowledge_scenario_other AS knowledgeScenarioOther,
+            source_issue AS sourceIssue, source_issues AS sourceIssues, source_issue_other AS sourceIssueOther,
+            ai_answer AS aiAnswer, share_link AS shareLink,
+            note, tags, images,
             source_message_id AS sourceMessageId, source_diary_id AS sourceDiaryId,
             rejection_reason AS rejectionReason, revision_number AS revisionNumber,
             COALESCE((SELECT JSON_ARRAYAGG(JSON_OBJECT(
@@ -74,9 +145,11 @@ router.get('/draft/from-revision/:submissionId', authMiddleware, async (req, res
   res.json({ code: 0, data: {
     ...item,
     revisionOfId: item.id,
-    isGoodCase: toBoolean(item.isGoodCase),
     tags: parseJson(item.tags, []),
     images: parseJson(item.images, []),
+    errorTypes: parseJson(item.errorTypes, item.errorType ? [item.errorType] : []),
+    knowledgeScenarios: parseJson(item.knowledgeScenarios, []),
+    sourceIssues: parseJson(item.sourceIssues, item.sourceIssue && item.sourceIssue !== 'none' ? [item.sourceIssue] : []),
     annotations: parseJson(item.annotations, []).map(annotation => ({
       ...annotation,
       confidence: annotation.confidence == null ? null : Number(annotation.confidence),
@@ -101,6 +174,11 @@ router.get('/draft/from-message/:messageId', authMiddleware, async (req, res) =>
     [assistant.conversationId, assistant.createdAt]
   )
   const sourceUserMessage = extractUserMessage(userMessage?.content)
+  const contextRows = await query(
+    `SELECT id, role, content, created_at AS createdAt FROM messages
+     WHERE conversation_id = ? AND created_at <= ? ORDER BY created_at ASC`,
+    [assistant.conversationId, assistant.createdAt]
+  )
   res.json({
     code: 0,
     data: {
@@ -110,6 +188,10 @@ router.get('/draft/from-message/:messageId', authMiddleware, async (req, res) =>
       platform: assistant.platform,
       model: assistant.model,
       images: sourceUserMessage.imageUrl ? [sourceUserMessage.imageUrl] : [],
+      contextMessages: contextRows.map(item => {
+        const parsedContent = item.role === 'user' ? extractUserMessage(item.content) : { prompt: item.content, imageUrl: '' }
+        return { id: item.id, role: item.role, content: parsedContent.prompt, imageUrl: parsedContent.imageUrl, createdAt: item.createdAt }
+      }),
       platformLocked: true,
     },
   })
@@ -164,6 +246,10 @@ router.post('/', authMiddleware, async (req, res) => {
   const parsed = submissionSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ message: '案例字段不完整或格式错误' })
   let data = parsed.data
+  const normalizedTaxonomy = normalizeCaseTaxonomy(data)
+  data = { ...data, ...normalizedTaxonomy }
+  const taxonomyError = caseTaxonomyError(data)
+  if (taxonomyError) return res.status(400).json({ message: taxonomyError })
 
   let revisionSource = null
   if (data.revisionOfId) {
@@ -217,6 +303,9 @@ router.post('/', authMiddleware, async (req, res) => {
   if (!data.prompt.trim() || !data.platform.trim() || !data.aiAnswer.trim()) {
     return res.status(400).json({ message: 'Prompt、AI 平台和 AI 回答为必填项' })
   }
+  if (data.platform === 'other' && !data.platformOther.trim()) {
+    return res.status(400).json({ message: '选择“其他”平台时，请填写具体平台名称' })
+  }
   const annotationError = annotationIntegrityError(data.aiAnswer, data.annotations)
   if (annotationError) return res.status(400).json({ message: annotationError })
 
@@ -225,12 +314,18 @@ router.post('/', authMiddleware, async (req, res) => {
     await transaction(async connection => {
       await connection.execute(
         `INSERT INTO submissions
-         (id, user_id, prompt, platform, model, ai_answer, category, share_link, satisfaction,
+         (id, user_id, prompt, platform, platform_other, model, ai_answer, category,
+          error_type, error_types, error_type_other, knowledge_scenarios, knowledge_scenario_other,
+          source_issue, source_issues, source_issue_other, share_link, satisfaction,
           is_good_case, note, tags, images, source_message_id, source_diary_id, status,
-          rejection_reason, revision_of_id, revision_number)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', '', ?, ?)`,
-        [id, req.user.id, data.prompt, data.platform, data.model, data.aiAnswer, data.category,
-          data.shareLink, data.satisfaction, data.isGoodCase ? 1 : 0, data.note,
+          published_at, rejection_reason, revision_of_id, revision_number)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, 'published',
+                 CURRENT_TIMESTAMP(3), '', ?, ?)`,
+        [id, req.user.id, data.prompt, data.platform, data.platformOther, data.model, data.aiAnswer,
+          data.errorTypes[0], data.errorTypes[0], JSON.stringify(data.errorTypes), data.errorTypeOther,
+          JSON.stringify(data.knowledgeScenarios), data.knowledgeScenarioOther,
+          data.sourceIssues[0] || 'none', JSON.stringify(data.sourceIssues), data.sourceIssueOther,
+          data.shareLink, data.note,
           JSON.stringify(data.tags), JSON.stringify(data.images), data.sourceMessageId || null, data.sourceDiaryId || null,
           revisionSource?.id || null, revisionSource ? Number(revisionSource.revisionNumber) + 1 : 1]
       )
@@ -244,6 +339,9 @@ router.post('/', authMiddleware, async (req, res) => {
             item.suffixText, item.issueType, item.comment, item.source, item.confidence ?? null]
         )
       }
+      if (data.draftId) {
+        await connection.execute('DELETE FROM case_drafts WHERE id = ? AND user_id = ?', [data.draftId, req.user.id])
+      }
     })
   } catch (error) {
     if (revisionSource && error.code === 'ER_DUP_ENTRY') {
@@ -252,13 +350,17 @@ router.post('/', authMiddleware, async (req, res) => {
     throw error
   }
 
-  res.json({ code: 0, data: { id, status: 'submitted' } })
+  res.json({ code: 0, data: { id, status: 'published' } })
 })
 
 router.get('/my', authMiddleware, async (req, res) => {
   const rows = await query(
-    `SELECT s.id, s.prompt, s.platform, s.model, s.category, s.ai_answer AS aiAnswer,
-            s.satisfaction, s.is_good_case AS isGoodCase, s.note, s.tags, s.images, s.status,
+    `SELECT s.id, s.prompt, s.platform, s.platform_other AS platformOther, s.model, s.category,
+            s.error_type AS errorType, s.error_types AS errorTypes, s.error_type_other AS errorTypeOther,
+            s.knowledge_scenarios AS knowledgeScenarios, s.knowledge_scenario_other AS knowledgeScenarioOther,
+            s.source_issue AS sourceIssue, s.source_issues AS sourceIssues, s.source_issue_other AS sourceIssueOther,
+            s.ai_answer AS aiAnswer, s.note, s.tags, s.images, s.status,
+            s.withdrawn_reason AS withdrawnReason,
             s.rejection_reason AS rejectionReason, s.revision_of_id AS revisionOfId,
             s.revision_number AS revisionNumber,
             EXISTS(SELECT 1 FROM submissions child WHERE child.revision_of_id = s.id) AS hasNewerRevision,
@@ -282,13 +384,16 @@ router.get('/my', authMiddleware, async (req, res) => {
 
 router.delete('/:id', authMiddleware, async (req, res) => {
   const item = await one(
-    `SELECT user_id AS userId, revision_of_id AS revisionOfId,
+    `SELECT user_id AS userId, status, revision_of_id AS revisionOfId,
             EXISTS(SELECT 1 FROM submissions child WHERE child.revision_of_id = submissions.id) AS hasNewerRevision
      FROM submissions WHERE id = ?`,
     [req.params.id]
   )
   if (!item) return res.status(404).json({ message: '该案例不存在' })
   if (item.userId !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ message: '无权删除该案例' })
+  if (item.status === 'published' || item.status === 'withdrawn') {
+    return res.status(409).json({ message: '已发布案例需由管理员撤回，不能直接删除' })
+  }
   if (!canDeleteSubmissionVersion(item.revisionOfId, item.hasNewerRevision)) {
     return res.status(409).json({ message: '版本化案例需要保留完整历史，不能删除' })
   }

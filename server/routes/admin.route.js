@@ -8,7 +8,7 @@ import { authMiddleware, memoryUpload, requireAdmin } from '../middleware.js'
 import { writeAudit } from '../audit.js'
 import { parseJson, toBoolean } from '../utils/data.js'
 import { parseImageContent } from '../utils/image.js'
-import { canPublishSubmissionVersion, caseReviewError } from '../services/teachingPolicy.js'
+import { canPublishSubmissionVersion, caseModerationError } from '../services/teachingPolicy.js'
 
 const router = Router()
 router.use(authMiddleware, requireAdmin)
@@ -28,13 +28,16 @@ function pagination(req) {
 }
 
 router.get('/overview', async (_req, res) => {
-  const [users, cases, diaries, messages] = await Promise.all([
+  const [users, cases, diaries, messages, ratings] = await Promise.all([
     one("SELECT COUNT(1) AS total, SUM(status = 'active') AS active FROM users WHERE role = 'student'"),
-    one("SELECT COUNT(1) AS total, SUM(status = 'submitted') AS pending FROM submissions"),
+    one("SELECT COUNT(1) AS total, SUM(status = 'published') AS published, SUM(status = 'withdrawn') AS withdrawn, SUM(status = 'submitted') AS legacyPending FROM submissions"),
     one("SELECT COUNT(1) AS total, SUM(log_date = CURRENT_DATE() AND status = 'submitted') AS today FROM information_need_logs"),
     one('SELECT COUNT(1) AS total FROM messages'),
+    one(`SELECT COUNT(1) AS total, ROUND(AVG(score), 2) AS average,
+                COUNT(1) / NULLIF((SELECT COUNT(1) FROM messages WHERE role = 'assistant'), 0) AS responseRate
+         FROM message_ratings`),
   ])
-  res.json({ code: 0, data: { users, cases, diaries, messages } })
+  res.json({ code: 0, data: { users, cases, diaries, messages, ratings } })
 })
 
 router.get('/users', async (req, res) => {
@@ -190,8 +193,10 @@ router.get('/conversations/:id/messages', async (req, res) => {
   const list = await query(
     `SELECT m.id, m.role, m.content, m.vision_context AS visionContext,
             m.provider, m.model, m.modality,
-            m.thinking_enabled AS thinkingEnabled, m.created_at AS createdAt
-     FROM messages m WHERE m.conversation_id = ? ORDER BY m.created_at`,
+            m.thinking_enabled AS thinkingEnabled, m.created_at AS createdAt,
+            COALESCE(r.score, 0) AS rating
+     FROM messages m LEFT JOIN message_ratings r ON r.message_id = m.id
+     WHERE m.conversation_id = ? ORDER BY m.created_at`,
     [req.params.id]
   )
   await writeAudit(req.user.id, 'conversation.view', 'conversation', req.params.id)
@@ -206,6 +211,18 @@ router.get('/cases', async (req, res) => {
   const params = []
   let condition = 'WHERE 1=1'
   if (req.query.status) { condition += ' AND s.status = ?'; params.push(req.query.status) }
+  if (req.query.errorType) {
+    condition += ' AND JSON_CONTAINS(COALESCE(s.error_types, JSON_ARRAY(s.error_type)), JSON_QUOTE(?))'
+    params.push(req.query.errorType)
+  }
+  if (req.query.sourceIssue) {
+    condition += " AND JSON_CONTAINS(COALESCE(s.source_issues, IF(s.source_issue = 'none', JSON_ARRAY(), JSON_ARRAY(s.source_issue))), JSON_QUOTE(?))"
+    params.push(req.query.sourceIssue)
+  }
+  if (req.query.knowledgeScenario) {
+    condition += ' AND JSON_CONTAINS(COALESCE(s.knowledge_scenarios, JSON_ARRAY()), JSON_QUOTE(?))'
+    params.push(req.query.knowledgeScenario)
+  }
   if (req.query.keyword) {
     condition += ' AND (u.student_id LIKE ? OR u.name LIKE ? OR s.prompt LIKE ?)'
     const value = `%${req.query.keyword}%`
@@ -213,8 +230,13 @@ router.get('/cases', async (req, res) => {
   }
   const total = await one(`SELECT COUNT(1) AS total FROM submissions s JOIN users u ON u.id = s.user_id ${condition}`, params)
   const list = await query(
-    `SELECT s.id, s.prompt, s.platform, s.model, s.category, s.status, s.note,
-            s.rejection_reason AS rejectionReason, s.revision_of_id AS revisionOfId,
+    `SELECT s.id, s.prompt, s.platform, s.platform_other AS platformOther, s.model, s.category,
+            s.error_type AS errorType, s.error_types AS errorTypes, s.error_type_other AS errorTypeOther,
+            s.knowledge_scenarios AS knowledgeScenarios, s.knowledge_scenario_other AS knowledgeScenarioOther,
+            s.source_issue AS sourceIssue, s.source_issues AS sourceIssues,
+            s.source_issue_other AS sourceIssueOther, s.status, s.note,
+            s.rejection_reason AS rejectionReason, s.withdrawn_reason AS withdrawnReason,
+            s.withdrawn_at AS withdrawnAt, s.revision_of_id AS revisionOfId,
             s.revision_number AS revisionNumber,
             s.created_at AS createdAt, u.student_id AS studentId, u.name,
             COUNT(a.id) AS annotationCount
@@ -223,15 +245,29 @@ router.get('/cases', async (req, res) => {
      GROUP BY s.id ORDER BY s.created_at DESC LIMIT ? OFFSET ?`,
     [...params, pageSize, offset]
   )
-  res.json({ code: 0, data: { list, total: Number(total.total), page } })
+  res.json({ code: 0, data: {
+    list: list.map(item => ({
+      ...item,
+      errorTypes: parseJson(item.errorTypes, item.errorType ? [item.errorType] : []),
+      knowledgeScenarios: parseJson(item.knowledgeScenarios, []),
+      sourceIssues: parseJson(item.sourceIssues, item.sourceIssue && item.sourceIssue !== 'none' ? [item.sourceIssue] : []),
+    })),
+    total: Number(total.total),
+    page,
+  } })
 })
 
 router.get('/cases/:id', async (req, res) => {
   const item = await one(
-    `SELECT s.id, s.prompt, s.platform, s.model, s.category, s.status, s.ai_answer AS aiAnswer,
-            s.share_link AS shareLink, s.satisfaction, s.is_good_case AS isGoodCase, s.note,
+    `SELECT s.id, s.prompt, s.platform, s.platform_other AS platformOther, s.model, s.category,
+            s.error_type AS errorType, s.error_types AS errorTypes, s.error_type_other AS errorTypeOther,
+            s.knowledge_scenarios AS knowledgeScenarios, s.knowledge_scenario_other AS knowledgeScenarioOther,
+            s.source_issue AS sourceIssue, s.source_issues AS sourceIssues,
+            s.source_issue_other AS sourceIssueOther, s.status, s.ai_answer AS aiAnswer,
+            s.share_link AS shareLink, s.note,
             s.tags, s.images, s.source_message_id AS sourceMessageId,
             s.source_diary_id AS sourceDiaryId, s.rejection_reason AS rejectionReason,
+            s.withdrawn_reason AS withdrawnReason, s.withdrawn_at AS withdrawnAt,
             s.revision_of_id AS revisionOfId, s.revision_number AS revisionNumber,
             s.created_at AS createdAt,
             u.student_id AS studentId, u.name,
@@ -253,21 +289,23 @@ router.get('/cases/:id', async (req, res) => {
   await writeAudit(req.user.id, 'case.view', 'submission', req.params.id)
   res.json({ code: 0, data: {
     ...item,
-    isGoodCase: toBoolean(item.isGoodCase),
     tags: parseJson(item.tags, []),
     images: parseJson(item.images, []),
+    errorTypes: parseJson(item.errorTypes, item.errorType ? [item.errorType] : []),
+    knowledgeScenarios: parseJson(item.knowledgeScenarios, []),
+    sourceIssues: parseJson(item.sourceIssues, item.sourceIssue && item.sourceIssue !== 'none' ? [item.sourceIssue] : []),
     annotations: parseJson(item.annotations, []),
   } })
 })
 
 router.put('/cases/:id/status', async (req, res) => {
   const parsed = z.object({
-    status: z.enum(['submitted', 'published', 'rejected']),
-    rejectionReason: z.string().trim().max(4000).optional().default(''),
+    status: z.enum(['published', 'withdrawn']),
+    reason: z.string().trim().max(4000).optional().default(''),
   }).safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ message: '案例状态无效' })
-  const reviewError = caseReviewError(parsed.data.status, parsed.data.rejectionReason)
-  if (reviewError) return res.status(400).json({ message: reviewError })
+  const moderationError = caseModerationError(parsed.data.status, parsed.data.reason)
+  if (moderationError) return res.status(400).json({ message: moderationError })
   if (parsed.data.status === 'published') {
     const version = await one(
       'SELECT EXISTS(SELECT 1 FROM submissions child WHERE child.revision_of_id = ?) AS hasNewerRevision',
@@ -278,11 +316,17 @@ router.put('/cases/:id/status', async (req, res) => {
     }
   }
   const result = await query(
-    'UPDATE submissions SET status = ?, rejection_reason = ? WHERE id = ?',
-    [parsed.data.status, parsed.data.status === 'rejected' ? parsed.data.rejectionReason : '', req.params.id]
+    `UPDATE submissions SET status = ?,
+       published_at = CASE WHEN ? = 'published' THEN CURRENT_TIMESTAMP(3) ELSE published_at END,
+       withdrawn_at = CASE WHEN ? = 'withdrawn' THEN CURRENT_TIMESTAMP(3) ELSE NULL END,
+       withdrawn_by_user_id = CASE WHEN ? = 'withdrawn' THEN ? ELSE NULL END,
+       withdrawn_reason = CASE WHEN ? = 'withdrawn' THEN ? ELSE NULL END
+     WHERE id = ?`,
+    [parsed.data.status, parsed.data.status, parsed.data.status, parsed.data.status, req.user.id,
+      parsed.data.status, parsed.data.reason, req.params.id]
   )
   if (!result.affectedRows) return res.status(404).json({ message: '案例不存在' })
-  await writeAudit(req.user.id, 'case.status', 'submission', req.params.id, parsed.data)
+  await writeAudit(req.user.id, parsed.data.status === 'withdrawn' ? 'case.withdraw' : 'case.restore', 'submission', req.params.id, parsed.data)
   res.json({ code: 0, data: null })
 })
 
@@ -346,18 +390,31 @@ router.get('/diaries/:id', async (req, res) => {
 })
 
 router.get('/export', async (req, res) => {
-  const type = ['users', 'conversations', 'cases', 'annotations', 'diaries'].includes(req.query.type) ? req.query.type : 'users'
+  const type = ['users', 'conversations', 'ratings', 'cases', 'annotations', 'diaries'].includes(req.query.type) ? req.query.type : 'users'
   const queries = {
     users: `SELECT student_id AS 账号, name AS 姓名, role AS 角色, status AS 状态, class_name AS 班级,
                    last_login_at AS 最后登录时间, created_at AS 创建时间 FROM users ORDER BY class_name, student_id`,
     conversations: `SELECT u.student_id AS 账号, u.name AS 姓名, c.id AS 会话ID, c.title AS 标题,
                            m.role AS 消息角色, m.content AS 消息内容, m.provider AS 提供商,
-                           m.model AS 模型, m.created_at AS 消息时间
+                           m.model AS 模型, r.score AS 满意度评分, m.created_at AS 消息时间
                     FROM conversations c JOIN users u ON u.id = c.user_id
-                    JOIN messages m ON m.conversation_id = c.id ORDER BY c.created_at, m.created_at`,
+                    JOIN messages m ON m.conversation_id = c.id
+                    LEFT JOIN message_ratings r ON r.message_id = m.id
+                    ORDER BY c.created_at, m.created_at`,
+    ratings: `SELECT u.student_id AS 账号, u.name AS 姓名, u.class_name AS 班级,
+                     c.id AS 会话ID, c.title AS 会话标题, m.id AS 回复ID,
+                     m.provider AS 提供商, m.model AS 模型, r.score AS 满意度评分,
+                     m.content AS AI回复, r.created_at AS 首次评分时间, r.updated_at AS 最后评分时间
+              FROM message_ratings r JOIN users u ON u.id = r.user_id
+              JOIN messages m ON m.id = r.message_id
+              JOIN conversations c ON c.id = m.conversation_id
+              ORDER BY r.updated_at DESC`,
     cases: `SELECT u.student_id AS 账号, u.name AS 姓名, s.id AS 案例ID, s.prompt AS 信息需求,
-                   s.ai_answer AS AI回答, s.platform AS 平台, s.model AS 模型, s.category AS 分类,
-                   s.note AS 整体说明, s.status AS 状态, s.rejection_reason AS 退回原因,
+                   s.ai_answer AS AI回答, s.platform AS 平台, s.platform_other AS 其他平台名称,
+                   s.model AS 模型, s.error_types AS 错误类型, s.error_type_other AS 其他错误类型,
+                   s.knowledge_scenarios AS 知识场景, s.knowledge_scenario_other AS 其他知识场景,
+                   s.source_issues AS 来源问题, s.source_issue_other AS 其他来源问题,
+                   s.note AS 整体说明, s.status AS 状态, s.withdrawn_reason AS 撤回原因,
                    s.revision_number AS 版本号, s.revision_of_id AS 上一版本ID, s.created_at AS 提交时间
             FROM submissions s JOIN users u ON u.id = s.user_id ORDER BY s.created_at DESC`,
     annotations: `SELECT COALESCE(au.student_id, u.student_id) AS 批注者账号,

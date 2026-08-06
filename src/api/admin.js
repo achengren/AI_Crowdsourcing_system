@@ -15,7 +15,7 @@ export const getAdminConversations = params => client.get('/admin/conversations'
 export const getAdminMessages = id => client.get(`/admin/conversations/${id}/messages`)
 export const getAdminCases = params => client.get('/admin/cases', { params })
 export const getAdminCase = id => client.get(`/admin/cases/${id}`)
-export const updateAdminCaseStatus = (id, status, rejectionReason = '') => client.put(`/admin/cases/${id}/status`, { status, rejectionReason })
+export const updateAdminCaseStatus = (id, status, reason = '') => client.put(`/admin/cases/${id}/status`, { status, reason })
 export const getAdminDiaries = params => client.get('/admin/diaries', { params })
 export const getAdminDiaryCompletion = date => client.get('/admin/diaries/completion', { params: { date } })
 export const getAdminDiary = id => client.get(`/admin/diaries/${id}`)

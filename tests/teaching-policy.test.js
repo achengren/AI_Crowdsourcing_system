@@ -5,6 +5,7 @@ import {
   canPublishSubmissionVersion,
   canVoteOnAnnotation,
   canWithdrawAnnotation,
+  caseModerationError,
   caseReviewError,
 } from '../server/services/teachingPolicy.js'
 
@@ -12,6 +13,12 @@ test('rejecting a case requires a reason', () => {
   assert.equal(caseReviewError('rejected', '  '), '退回案例时必须填写原因')
   assert.equal(caseReviewError('rejected', '请补充证据'), null)
   assert.equal(caseReviewError('published', ''), null)
+})
+
+test('withdrawing a published case requires an administrator reason', () => {
+  assert.equal(caseModerationError('withdrawn', ''), '撤回案例时必须填写原因')
+  assert.equal(caseModerationError('withdrawn', '包含个人信息'), null)
+  assert.equal(caseModerationError('published', ''), null)
 })
 
 test('annotation authors cannot vote on their own annotation', () => {

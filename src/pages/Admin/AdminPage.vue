@@ -28,7 +28,8 @@
         </div>
         <div class="overview-note">
           <h2>待处理事项</h2>
-          <div class="task-line"><span>待审核案例</span><strong>{{ overview.cases?.pending || 0 }}</strong></div>
+          <div class="task-line"><span>已发布案例</span><strong>{{ overview.cases?.published || 0 }}</strong></div>
+          <div class="task-line"><span>已撤回案例</span><strong>{{ overview.cases?.withdrawn || 0 }}</strong></div>
           <div class="task-line"><span>今日已提交日记</span><strong>{{ overview.diaries?.today || 0 }}</strong></div>
           <div class="task-line"><span>已记录消息</span><strong>{{ overview.messages?.total || 0 }}</strong></div>
         </div>
@@ -64,14 +65,18 @@
       <section v-else-if="activeView === 'cases'">
         <div class="table-toolbar">
           <a-input-search v-model:value="filters.cases" placeholder="搜索学生或案例" style="width:300px" @search="onCaseSearch" />
-          <a-select v-model:value="caseStatus" style="width:140px" @change="onCaseStatusChange"><a-select-option value="">全部状态</a-select-option><a-select-option value="draft">草稿</a-select-option><a-select-option value="submitted">待审核</a-select-option><a-select-option value="published">已发布</a-select-option><a-select-option value="rejected">未通过</a-select-option></a-select>
+          <a-space wrap>
+            <a-select v-model:value="caseErrorType" allow-clear placeholder="错误类型" style="width:170px" @change="onCaseStatusChange"><a-select-option v-for="item in ERROR_TYPE_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</a-select-option></a-select>
+            <a-select v-model:value="caseStatus" style="width:150px" @change="onCaseStatusChange"><a-select-option value="">全部状态</a-select-option><a-select-option value="published">已发布</a-select-option><a-select-option value="withdrawn">已撤回</a-select-option><a-select-option value="submitted">旧待审核记录</a-select-option><a-select-option value="rejected">旧退回记录</a-select-option></a-select>
+          </a-space>
         </div>
         <a-table :columns="caseColumns" :data-source="cases" row-key="id" :pagination="false" :scroll="{ x: 1150 }" size="middle">
           <template #bodyCell="{ column, record }">
-            <template v-if="column.key === 'prompt'"><div class="truncate">{{ record.prompt }}</div><div class="subtext">{{ record.platform }} · {{ record.model || '未知模型' }} · 第 {{ record.revisionNumber || 1 }} 版</div></template>
+            <template v-if="column.key === 'prompt'"><div class="truncate">{{ record.prompt }}</div><div class="subtext">{{ displayPlatform(record) }} · {{ record.model || '未知模型' }}</div></template>
             <template v-else-if="column.key === 'user'"><strong>{{ record.name }}</strong><div class="subtext">{{ record.studentId }}</div></template>
+            <template v-else-if="column.dataIndex === 'errorType'">{{ taxonomyText(record.errorTypes, record.errorType || record.category, ERROR_TYPE_OPTIONS, record.errorTypeOther) }}</template>
             <template v-else-if="column.key === 'status'"><a-tag :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag></template>
-            <template v-else-if="column.key === 'actions'"><a-space><a-button size="small" @click="viewCase(record)">查看</a-button><a-button v-if="record.status !== 'published'" size="small" type="primary" ghost @click="setCaseStatus(record, 'published')">发布</a-button><a-button v-if="record.status !== 'rejected'" size="small" danger @click="openReject(record)">退回</a-button></a-space></template>
+            <template v-else-if="column.key === 'actions'"><a-space><a-button size="small" @click="viewCase(record)">查看</a-button><a-button v-if="record.status === 'withdrawn' || record.status === 'submitted' || record.status === 'rejected'" size="small" type="primary" ghost @click="setCaseStatus(record, 'published')">{{ record.status === 'withdrawn' ? '恢复' : '发布旧记录' }}</a-button><a-button v-if="record.status === 'published'" size="small" danger @click="openWithdraw(record)">撤回</a-button></a-space></template>
           </template>
         </a-table>
         <a-pagination class="pager" v-model:current="pages.cases" :total="totals.cases" :page-size="20" @change="loadCases" />
@@ -116,6 +121,7 @@
     <a-drawer v-model:open="conversationVisible" width="min(760px, 92vw)" :title="selectedConversation?.title">
       <div v-for="item in conversationMessages" :key="item.id" :class="['admin-message', item.role]">
         <div class="message-meta">{{ item.role === 'assistant' ? `${item.provider} · ${item.model}` : selectedConversation?.name }}</div>
+        <div v-if="item.role === 'assistant' && item.rating" class="message-rating">回答满意度：{{ item.rating }}/5</div>
         <a-image v-if="item.imageUrl" class="conversation-image" :src="item.imageUrl" :width="240" :height="160" alt="用户上传的原图" />
         <div v-if="item.content" class="admin-message-content">{{ item.content }}</div>
         <a-collapse v-if="item.visionContext" ghost size="small" class="vision-context">
@@ -129,19 +135,18 @@
     <a-drawer v-model:open="caseDetailVisible" width="min(920px, 96vw)" title="案例管理详情">
       <template #extra>
         <a-space v-if="selectedCase">
-          <a-button type="primary" ghost @click="setCaseStatus(selectedCase, 'published')">发布案例</a-button>
-          <a-button danger @click="openReject(selectedCase)">退回案例</a-button>
+          <a-button v-if="selectedCase.status === 'withdrawn'" type="primary" ghost @click="setCaseStatus(selectedCase, 'published')">恢复发布</a-button>
+          <a-button v-if="selectedCase.status === 'published'" danger @click="openWithdraw(selectedCase)">撤回案例</a-button>
         </a-space>
       </template>
       <div v-if="selectedCase" class="admin-detail">
         <div class="detail-heading"><div><strong>{{ selectedCase.name }}</strong><span>{{ selectedCase.studentId }}</span></div><a-tag :color="statusColor(selectedCase.status)">{{ statusLabel(selectedCase.status) }}</a-tag></div>
         <a-descriptions :column="2" size="small" bordered>
-          <a-descriptions-item label="平台">{{ selectedCase.platform }}</a-descriptions-item>
+          <a-descriptions-item label="平台">{{ displayPlatform(selectedCase) }}</a-descriptions-item>
           <a-descriptions-item label="模型">{{ selectedCase.model || '未记录' }}</a-descriptions-item>
-          <a-descriptions-item label="分类">{{ selectedCase.category }}</a-descriptions-item>
-          <a-descriptions-item label="满意度">{{ selectedCase.satisfaction || 0 }}/5</a-descriptions-item>
-          <a-descriptions-item label="案例版本">第 {{ selectedCase.revisionNumber || 1 }} 版</a-descriptions-item>
-          <a-descriptions-item label="上一版本">{{ selectedCase.revisionOfId || '无' }}</a-descriptions-item>
+          <a-descriptions-item label="错误类型">{{ taxonomyText(selectedCase.errorTypes, selectedCase.errorType || selectedCase.category, ERROR_TYPE_OPTIONS, selectedCase.errorTypeOther) }}</a-descriptions-item>
+          <a-descriptions-item label="来源问题">{{ taxonomyText(selectedCase.sourceIssues, '', SOURCE_ISSUE_OPTIONS, selectedCase.sourceIssueOther) }}</a-descriptions-item>
+          <a-descriptions-item label="知识场景" :span="2">{{ taxonomyText(selectedCase.knowledgeScenarios, '', KNOWLEDGE_SCENARIO_OPTIONS, selectedCase.knowledgeScenarioOther) }}</a-descriptions-item>
         </a-descriptions>
         <section class="detail-block"><h3>信息需求</h3><p>{{ selectedCase.prompt }}</p></section>
         <section v-if="selectedCase.images?.length" class="detail-block">
@@ -152,16 +157,16 @@
             </div>
           </a-image-preview-group>
         </section>
-        <a-alert v-if="selectedCase.rejectionReason" type="error" show-icon message="退回原因" :description="selectedCase.rejectionReason" />
+        <a-alert v-if="selectedCase.withdrawnReason" type="warning" show-icon message="撤回原因" :description="selectedCase.withdrawnReason" />
         <section class="detail-block"><h3>AI 回复与片段批注</h3><AnnotationEditor :text="selectedCase.aiAnswer" :model-value="selectedCase.annotations || []" readonly allow-withdraw @withdraw="onAdminWithdrawAnnotation" /></section>
         <section v-if="selectedCase.note" class="detail-block"><h3>整体说明</h3><p>{{ selectedCase.note }}</p></section>
         <section v-if="selectedCase.tags?.length" class="detail-block"><h3>标签</h3><a-space wrap><a-tag v-for="tag in selectedCase.tags" :key="tag">{{ tag }}</a-tag></a-space></section>
       </div>
     </a-drawer>
 
-    <a-modal v-model:open="rejectVisible" title="退回案例" ok-text="确认退回" cancel-text="取消" :confirm-loading="rejecting" @ok="confirmReject">
-      <a-alert type="warning" show-icon message="退回原因会展示给学生，学生修改后将生成新的案例版本。" />
-      <a-textarea v-model:value="rejectionReason" :rows="4" :maxlength="4000" show-count placeholder="请具体说明需要修改的内容" class="reject-input" />
+    <a-modal v-model:open="withdrawVisible" title="撤回案例" ok-text="确认撤回" cancel-text="取消" :confirm-loading="withdrawing" @ok="confirmWithdraw">
+      <a-alert type="warning" show-icon message="撤回后案例不再在广场展示，已有批注、投票和评论将完整保留。" />
+      <a-textarea v-model:value="withdrawReason" :rows="4" :maxlength="4000" show-count placeholder="请填写撤回原因，作者可以在个人主页查看" class="reject-input" />
     </a-modal>
 
     <a-drawer v-model:open="diaryDetailVisible" width="min(760px, 96vw)" title="信息需求记录详情">
@@ -194,6 +199,7 @@ import { useAuthStore } from '../../store/auth'
 import AnnotationEditor from '../../components/cases/AnnotationEditor.vue'
 import { getAdminOverview, getAdminUsers, createAdminUser, updateAdminUser, disableAdminUser, resetAdminUserPassword, importAdminUsers, getAdminConversations, getAdminMessages, getAdminCases, getAdminCase, updateAdminCaseStatus, getAdminDiaries, getAdminDiary, getAdminDiaryCompletion, exportAdminData } from '../../api/admin'
 import { withdrawCaseAnnotation } from '../../api/submission'
+import { ERROR_TYPE_OPTIONS, KNOWLEDGE_SCENARIO_OPTIONS, SOURCE_ISSUE_OPTIONS, optionLabel, platformLabel } from '../../constants/options'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -211,15 +217,17 @@ const currentDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'long' }).form
 const overview = ref({})
 const metrics = computed(() => [
   { label: '学生账号', value: overview.value.users?.total || 0, note: `${overview.value.users?.active || 0} 个启用` },
-  { label: '案例总数', value: overview.value.cases?.total || 0, note: `${overview.value.cases?.pending || 0} 条待审核` },
+  { label: '案例总数', value: overview.value.cases?.total || 0, note: `${overview.value.cases?.published || 0} 条已发布` },
   { label: '日记记录', value: overview.value.diaries?.total || 0, note: `${overview.value.diaries?.today || 0} 条今日提交` },
   { label: '对话消息', value: overview.value.messages?.total || 0, note: '累计记录' },
+  { label: '回复满意度', value: overview.value.ratings?.average || '-', note: `${overview.value.ratings?.total || 0} 条评分` },
 ])
 const filters = reactive({ users: '', conversations: '', cases: '', diaries: '' })
 const pages = reactive({ users: 1, conversations: 1, cases: 1, diaries: 1 })
 const totals = reactive({ users: 0, conversations: 0, cases: 0, diaries: 0 })
 const users = ref([]), conversations = ref([]), cases = ref([]), adminDiaries = ref([])
 const caseStatus = ref('')
+const caseErrorType = ref(undefined)
 const completionDate = ref(dayjs())
 const diaryCompletion = ref([])
 const completionRequired = ref(3)
@@ -227,16 +235,16 @@ const completionIncomplete = computed(() => diaryCompletion.value.filter(item =>
 
 const userColumns = [{ title: '姓名/账号', key: 'identity' }, { title: '班级', dataIndex: 'className' }, { title: '角色', key: 'role' }, { title: '状态', key: 'status' }, { title: '最后登录', dataIndex: 'lastLoginAt' }, { title: '操作', key: 'actions', width: 230 }]
 const conversationColumns = [{ title: '学生', key: 'user', width: 180 }, { title: '会话标题', dataIndex: 'title' }, { title: '消息数', dataIndex: 'messageCount', width: 90 }, { title: '更新时间', dataIndex: 'updatedAt', width: 180 }, { title: '操作', key: 'actions', width: 100 }]
-const caseColumns = [{ title: '案例', key: 'prompt' }, { title: '学生', key: 'user', width: 160 }, { title: '分类', dataIndex: 'category', width: 150 }, { title: '批注数', dataIndex: 'annotationCount', width: 80 }, { title: '状态', key: 'status', width: 90 }, { title: '操作', key: 'actions', width: 230 }]
+const caseColumns = [{ title: '案例', key: 'prompt' }, { title: '学生', key: 'user', width: 160 }, { title: '错误类型', dataIndex: 'errorType', width: 170 }, { title: '批注数', dataIndex: 'annotationCount', width: 80 }, { title: '状态', key: 'status', width: 110 }, { title: '操作', key: 'actions', width: 250 }]
 const diaryColumns = [{ title: '日期', dataIndex: 'logDate', width: 110 }, { title: '学生', key: 'user', width: 160 }, { title: '信息需求', key: 'need' }, { title: 'GenAI', key: 'genai', width: 110 }, { title: '状态', dataIndex: 'status', width: 90 }, { title: '操作', key: 'actions', width: 100 }]
 const completionColumns = [{ title: '学生', key: 'student' }, { title: '已提交', key: 'progress', width: 110 }]
-const exportItems = [{ type: 'users', label: '账号清单', note: '账号、角色、班级与登录状态' }, { type: 'conversations', label: '全部对话', note: '逐条消息、模型与时间' }, { type: 'cases', label: '案例数据', note: '案例主体、审核状态与来源' }, { type: 'annotations', label: '片段批注', note: '原句、问题类型与批注内容' }, { type: 'diaries', label: '信息需求日记', note: '完整作业记录与 GenAI 标记' }]
+const exportItems = [{ type: 'users', label: '账号清单', note: '账号、角色、班级与登录状态' }, { type: 'conversations', label: '全部对话', note: '逐条消息、模型、评分与时间' }, { type: 'ratings', label: '回复满意度', note: '逐条 AI 回复的评分和更新时间' }, { type: 'cases', label: '案例数据', note: '案例主体、三维分类与发布状态' }, { type: 'annotations', label: '片段批注', note: '原句、问题类型与批注内容' }, { type: 'diaries', label: '信息需求日记', note: '完整作业记录与 GenAI 标记' }]
 
 async function switchView(key) { activeView.value = key; await ({ overview: loadOverview, users: loadUsers, conversations: loadConversations, cases: loadCases, diaries: loadDiaries }[key]?.()) }
 async function loadOverview() { overview.value = (await getAdminOverview()).data }
 async function loadUsers() { const r = await getAdminUsers({ page: pages.users, keyword: filters.users }); users.value = r.data.list; totals.users = r.data.total }
 async function loadConversations() { const r = await getAdminConversations({ page: pages.conversations, keyword: filters.conversations }); conversations.value = r.data.list; totals.conversations = r.data.total }
-async function loadCases() { const r = await getAdminCases({ page: pages.cases, keyword: filters.cases, status: caseStatus.value }); cases.value = r.data.list; totals.cases = r.data.total }
+async function loadCases() { const r = await getAdminCases({ page: pages.cases, keyword: filters.cases, status: caseStatus.value, errorType: caseErrorType.value }); cases.value = r.data.list; totals.cases = r.data.total }
 function onCaseSearch() { pages.cases = 1; loadCases() }
 function onCaseStatusChange() { pages.cases = 1; loadCases() }
 async function loadDiaries() { const [r] = await Promise.all([getAdminDiaries({ page: pages.diaries, keyword: filters.diaries }), loadDiaryCompletion()]); adminDiaries.value = r.data.list; totals.diaries = r.data.total }
@@ -259,14 +267,19 @@ const caseDetailVisible = ref(false), selectedCase = ref(null)
 async function viewCase(record) { selectedCase.value = (await getAdminCase(record.id)).data; caseDetailVisible.value = true }
 const diaryDetailVisible = ref(false), selectedDiary = ref(null)
 async function viewDiary(record) { selectedDiary.value = (await getAdminDiary(record.id)).data; diaryDetailVisible.value = true }
-async function setCaseStatus(record, status) { await updateAdminCaseStatus(record.id, status); if (selectedCase.value?.id === record.id) { selectedCase.value.status = status; selectedCase.value.rejectionReason = '' }; message.success('案例已发布'); await loadCases(); await loadOverview() }
-const rejectVisible = ref(false), rejectTarget = ref(null), rejectionReason = ref(''), rejecting = ref(false)
-function openReject(record) { rejectTarget.value = record; rejectionReason.value = ''; rejectVisible.value = true }
-async function confirmReject() { if (!rejectionReason.value.trim()) return message.warning('请填写退回原因'); rejecting.value = true; try { await updateAdminCaseStatus(rejectTarget.value.id, 'rejected', rejectionReason.value.trim()); rejectVisible.value = false; if (selectedCase.value?.id === rejectTarget.value.id) { selectedCase.value.status = 'rejected'; selectedCase.value.rejectionReason = rejectionReason.value.trim() }; message.success('案例已退回'); await loadCases(); await loadOverview() } finally { rejecting.value = false } }
+function taxonomyText(values, fallback, options, otherText = '') {
+  const selected = Array.isArray(values) && values.length ? values : fallback ? [fallback] : []
+  return selected.map(value => value === 'other' && otherText ? `其他：${otherText}` : optionLabel(options, value)).join('、') || '未标注'
+}
+async function setCaseStatus(record, status) { await updateAdminCaseStatus(record.id, status); if (selectedCase.value?.id === record.id) { selectedCase.value.status = status; selectedCase.value.withdrawnReason = '' }; message.success(status === 'published' ? '案例已发布' : '状态已更新'); await loadCases(); await loadOverview() }
+const withdrawVisible = ref(false), withdrawTarget = ref(null), withdrawReason = ref(''), withdrawing = ref(false)
+function openWithdraw(record) { withdrawTarget.value = record; withdrawReason.value = ''; withdrawVisible.value = true }
+async function confirmWithdraw() { if (!withdrawReason.value.trim()) return message.warning('请填写撤回原因'); withdrawing.value = true; try { await updateAdminCaseStatus(withdrawTarget.value.id, 'withdrawn', withdrawReason.value.trim()); withdrawVisible.value = false; if (selectedCase.value?.id === withdrawTarget.value.id) { selectedCase.value.status = 'withdrawn'; selectedCase.value.withdrawnReason = withdrawReason.value.trim() }; message.success('案例已撤回并保留历史记录'); await loadCases(); await loadOverview() } finally { withdrawing.value = false } }
 async function onAdminWithdrawAnnotation(annotation) { await withdrawCaseAnnotation(selectedCase.value.id, annotation.id); annotation.status = 'withdrawn'; annotation.withdrawnAt = new Date().toISOString(); message.success('批注已撤回并保留审计记录') }
 async function runExport(type) { await exportAdminData(type); message.success('导出已开始下载') }
-function statusLabel(value) { return ({ draft: '草稿', submitted: '待审核', published: '已发布', rejected: '未通过' })[value] || value }
-function statusColor(value) { return ({ draft: 'default', submitted: 'orange', published: 'green', rejected: 'red' })[value] }
+function statusLabel(value) { return ({ draft: '草稿', submitted: '旧待审核记录', published: '已发布', rejected: '旧退回记录', withdrawn: '已撤回' })[value] || value }
+function statusColor(value) { return ({ draft: 'default', submitted: 'orange', published: 'green', rejected: 'red', withdrawn: 'default' })[value] }
+function displayPlatform(record) { return platformLabel(record.platform, record.platformOther) }
 function backToStudent() { router.push('/chat') }
 function logout() { auth.logout(); router.push('/login') }
 </script>
@@ -295,7 +308,7 @@ function logout() { auth.logout(); router.push('/login') }
 .admin-header h1 { margin: 6px 0 0; font-size: 25px; }
 .eyebrow { color: var(--hib-red); font-size: 11px; letter-spacing: 0; }
 .date-label, .subtext { color: #748078; font-size: 12px; }
-.metrics { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--hib-line); }
+.metrics { display: grid; grid-template-columns: repeat(5, 1fr); border-bottom: 1px solid var(--hib-line); }
 .metric { padding: 28px 24px 25px 0; }
 .metric + .metric { padding-left: 24px; border-left: 1px solid var(--hib-line); }
 .metric span, .metric small { display: block; color: #738078; }
@@ -310,6 +323,7 @@ function logout() { auth.logout(); router.push('/login') }
 .reset-button { margin-top: 16px; }
 .admin-message { width: 86%; margin-bottom: 16px; padding: 12px 14px; white-space: pre-wrap; background: #f0eeec; }
 .admin-message.user { margin-left: auto; background: var(--hib-red-soft); }
+.message-rating { margin: 3px 0 7px; color: var(--hib-red); font-size: 12px; }
 .message-meta { color: #6d7871; font-size: 11px; margin-bottom: 6px; }
 .admin-message-content { margin-top: 8px; line-height: 1.65; }
 .conversation-image { display: block; margin-top: 8px; }

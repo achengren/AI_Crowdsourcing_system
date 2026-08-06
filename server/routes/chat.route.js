@@ -104,7 +104,10 @@ router.post('/send', authMiddleware, async (req, res) => {
 
     if (!conversationId) {
       generateTitle(prompt).then(title => {
-        if (title) query('UPDATE conversations SET title = ? WHERE id = ?', [title, convId]).catch(() => {})
+        if (title) query(
+          'UPDATE conversations SET title = ? WHERE id = ? AND title_manually_edited = 0',
+          [title, convId]
+        ).catch(() => {})
       }).catch(() => {})
     }
 
