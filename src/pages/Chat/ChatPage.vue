@@ -94,6 +94,7 @@
             @press-enter="onEnterPress"
             @compositionstart="isComposing = true"
             @compositionend="isComposing = false"
+            @paste="onPaste"
           />
           <a-button type="primary" :loading="sending" @click="onSend" class="send-btn">
             <SendOutlined />
@@ -277,6 +278,22 @@ async function onFileChange(e) {
   } finally {
     uploading.value = false
     if (fileInput.value) fileInput.value.value = ''
+  }
+}
+
+async function onPaste(e) {
+  const file = e.clipboardData?.files?.[0]
+  if (!file?.type?.startsWith('image/')) return
+  e.preventDefault()
+  uploading.value = true
+  try {
+    const res = await uploadImage(file)
+    imageUrl.value = res.data.url
+    message.success('图片已粘贴')
+  } catch {
+    message.error('图片上传失败')
+  } finally {
+    uploading.value = false
   }
 }
 

@@ -290,6 +290,19 @@
           </div>
         </div>
 
+        <div class="detail-section" v-if="detailCase.images?.length">
+          <div class="detail-section-title">相关图片</div>
+          <div class="detail-images">
+            <img
+              v-for="(url, idx) in detailCase.images"
+              :key="idx"
+              :src="url"
+              class="detail-img"
+              @click="onPreviewImage(detailCase.images, idx)"
+            />
+          </div>
+        </div>
+
         <div class="detail-section">
           <div class="detail-section-title">AI 回复</div>
           <div :class="{ collapsed: detailAnswerCollapsed }">
@@ -323,18 +336,6 @@
             @withdraw="onWithdrawAnnotation"
             @comment-count-change="onAnnotationCommentCountChange"
           />
-        </div>
-        <div class="detail-section" v-if="detailCase.images?.length">
-          <div class="detail-section-title">相关截图</div>
-          <div class="detail-images">
-            <img
-              v-for="(url, idx) in detailCase.images"
-              :key="idx"
-              :src="url"
-              class="detail-img"
-              @click="onPreviewImage(detailCase.images, idx)"
-            />
-          </div>
         </div>
         <a-collapse v-if="detailComments.length" ghost class="legacy-discussion">
           <a-collapse-panel key="legacy" :header="`整体讨论（历史评论 ${detailComments.length}）`">
@@ -1013,8 +1014,8 @@ function displayPlatform(item) {
 }
 
 .detail-img {
-  width: 120px;
-  height: 120px;
+  width: 180px;
+  height: 180px;
   object-fit: cover;
   border-radius: 6px;
   cursor: pointer;

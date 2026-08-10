@@ -17,7 +17,7 @@
       </header>
 
       <div v-if="loading" class="loading-state"><a-spin />正在读取案例资料...</div>
-      <div v-else class="editor-workspace">
+      <div v-else class="editor-workspace" @paste="onEditorPaste">
         <aside class="source-panel">
           <div class="panel-heading">
             <span>原始对话</span>
@@ -31,7 +31,8 @@
             <div v-for="item in contextMessages" :key="item.id" :class="['context-message', item.role]">
               <span>{{ item.role === 'assistant' ? 'AI' : '用户' }}</span>
               <img v-if="item.imageUrl" :src="item.imageUrl" alt="对话图片" @click="previewSrc = item.imageUrl" />
-              <p>{{ item.content }}</p>
+              <div v-if="item.role === 'assistant'" class="context-md markdown-body" v-html="renderMd(item.content)"></div>
+              <p v-else>{{ item.content }}</p>
             </div>
           </div>
           <div v-else class="source-preview">
@@ -169,6 +170,8 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { ArrowLeftOutlined, CheckCircleOutlined, CopyOutlined, ExclamationCircleOutlined, FileTextOutlined, InboxOutlined, InfoCircleOutlined, LoadingOutlined, PlusOutlined, SaveOutlined, ScanOutlined, SendOutlined } from '@ant-design/icons-vue'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 import ConversationSidebar from '../../components/common/ConversationSidebar.vue'
 import AnnotationEditor from '../../components/cases/AnnotationEditor.vue'
 import {
@@ -261,6 +264,10 @@ function preventUnsavedExit(event) {
   if (!dirty.value && !saving.value) return
   event.preventDefault()
   event.returnValue = ''
+}
+
+function renderMd(text) {
+  return DOMPurify.sanitize(marked(text || ''))
 }
 
 async function loadInitialData() {
@@ -455,6 +462,19 @@ async function onBeforeUpload(file) {
   return false
 }
 
+async function onEditorPaste(e) {
+  const file = e.clipboardData?.files?.[0]
+  if (!file?.type?.startsWith('image/')) return
+  if (form.images.length >= 6) { message.warning('最多上传 6 张图片'); return }
+  e.preventDefault()
+  try {
+    const response = await uploadImage(file)
+    if (!form.images.includes(response.data.url)) form.images.push(response.data.url)
+    syncUploadFiles()
+    message.success('图片已粘贴')
+  } catch { message.error('图片上传失败') }
+}
+
 function syncUploadFiles() {
   uploadFiles.value = form.images.map((url, index) => ({ uid: `image-${index}`, name: `相关截图 ${index + 1}`, status: 'done', url, thumbUrl: url }))
 }
@@ -484,9 +504,9 @@ function onPreview(file) { previewSrc.value = file.url || file.thumbUrl }
 .source-context-note { display: flex; align-items: flex-start; gap: 8px; margin: -4px 0 18px; padding: 10px 12px; border-left: 2px solid var(--hib-red); background: var(--hib-red-soft); color: var(--hib-muted); font-size: 12px; line-height: 1.65; }
 .source-context-note :deep(.anticon) { flex: 0 0 auto; margin-top: 3px; color: var(--hib-red); }
 .context-list { display: grid; gap: 14px; }
-.context-message { padding: 14px 15px; border-left: 3px solid #9da5a0; background: rgba(255,255,255,.66); }
+.context-message { padding: 14px 18px 14px 22px; border-left: 3px solid #9da5a0; background: rgba(255,255,255,.66); }
 .context-message.assistant { border-left-color: var(--hib-red); }
-.context-message > span, .source-preview span { color: var(--hib-muted); font-size: 11px; font-weight: 650; text-transform: uppercase; }
+.context-message > span, .source-preview span { display: block; color: var(--hib-muted); font-size: 11px; font-weight: 650; text-transform: uppercase; }
 .context-message p, .source-preview p { margin: 7px 0 0; white-space: pre-wrap; line-height: 1.65; }
 .context-message img { width: min(240px, 100%); max-height: 180px; margin-top: 8px; object-fit: cover; cursor: zoom-in; }
 .source-preview { display: grid; gap: 20px; }
