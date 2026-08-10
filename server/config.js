@@ -53,6 +53,9 @@ export const AI_TEXT_MAX_RETRIES = Math.max(0, Number(process.env.AI_TEXT_MAX_RE
 export const AI_VISION_MAX_RETRIES = Math.max(0, Number(process.env.AI_VISION_MAX_RETRIES || 1))
 
 export function validateRuntimeConfig() {
+  if (NODE_ENV === 'production' && JWT_SECRET === 'local-development-only-change-me') {
+    throw new Error('生产环境必须设置 JWT_SECRET 环境变量')
+  }
   const required = { DEEPSEEK_MODEL, OLLAMA_BASE_URL, OLLAMA_TEXT_MODEL, VISION_MODEL, TITLE_MODEL }
   const missing = Object.entries(required).filter(([, value]) => !value).map(([name]) => name)
   if (missing.length) throw new Error(`缺少必要的 AI 环境变量: ${missing.join(', ')}`)

@@ -11,6 +11,13 @@ const router = Router()
 router.post('/send', authMiddleware, async (req, res) => {
   const { prompt, conversationId, imageUrl } = req.body
   if (!prompt && !imageUrl) return res.status(400).json({ message: '请输入内容' })
+  if (imageUrl) {
+    const owned = await one(
+      'SELECT 1 FROM uploaded_files WHERE file_path = ? AND user_id = ? LIMIT 1',
+      [imageUrl, req.user.id]
+    )
+    if (!owned) return res.status(400).json({ message: '无效的图片引用' })
+  }
   if (!acquireAiSlot(req.user.id)) return res.status(429).json({ message: 'AI 请求较多，请等待当前请求完成后再试' })
 
   try {
@@ -29,7 +36,7 @@ router.post('/send', authMiddleware, async (req, res) => {
     let historyMessages = conversationId
       ? await query(
           `SELECT role, content, vision_context AS visionContext
-           FROM messages WHERE conversation_id = ? ORDER BY created_at ASC`,
+           FROM messages WHERE conversation_id = ? ORDER BY created_at ASC, FIELD(role, 'user', 'assistant')`,
           [conversationId]
         )
       : []
@@ -81,6 +88,8 @@ router.post('/send', authMiddleware, async (req, res) => {
     const userMessageId = genId()
     const assistantMessageId = genId()
     const userContent = imageUrl ? `[image:${imageUrl}]\n${prompt || ''}` : prompt
+    const userCreatedAt = new Date()
+    const assistantCreatedAt = new Date(userCreatedAt.getTime() + 1)
 
     await transaction(async connection => {
       if (!conversationId) {
@@ -90,14 +99,14 @@ router.post('/send', authMiddleware, async (req, res) => {
         )
       }
       await connection.execute(
-        `INSERT INTO messages (id, conversation_id, role, content, vision_context, modality)
-         VALUES (?, ?, 'user', ?, ?, ?)`,
-        [userMessageId, convId, userContent, result.visionContext || null, imageUrl ? 'vision' : 'text']
+        `INSERT INTO messages (id, conversation_id, role, content, vision_context, modality, created_at)
+         VALUES (?, ?, 'user', ?, ?, ?, ?)`,
+        [userMessageId, convId, userContent, result.visionContext || null, imageUrl ? 'vision' : 'text', userCreatedAt]
       )
       await connection.execute(
-        `INSERT INTO messages (id, conversation_id, role, content, provider, model, modality, thinking_enabled)
-         VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?)`,
-        [assistantMessageId, convId, result.content, result.provider, result.model, result.modality, result.thinkingEnabled ? 1 : 0]
+        `INSERT INTO messages (id, conversation_id, role, content, provider, model, modality, thinking_enabled, created_at)
+         VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?, ?)`,
+        [assistantMessageId, convId, result.content, result.provider, result.model, result.modality, result.thinkingEnabled ? 1 : 0, assistantCreatedAt]
       )
       await connection.execute('UPDATE conversations SET updated_at = CURRENT_TIMESTAMP(3) WHERE id = ?', [convId])
     })
@@ -138,8 +147,13 @@ router.post('/send', authMiddleware, async (req, res) => {
 router.post('/solution-suggestion', authMiddleware, async (req, res) => {
   const { prompt, reply } = req.body
   if (!prompt || !reply) return res.status(400).json({ message: '缺少参数' })
-  const suggestion = await generateSolutionSuggestion(prompt, reply)
-  res.json({ code: 0, data: { suggestion } })
+  if (!acquireAiSlot(req.user.id)) return res.status(429).json({ message: 'AI 请求较多，请等待当前请求完成后再试' })
+  try {
+    const suggestion = await generateSolutionSuggestion(prompt, reply)
+    res.json({ code: 0, data: { suggestion } })
+  } finally {
+    releaseAiSlot(req.user.id)
+  }
 })
 
 export default router

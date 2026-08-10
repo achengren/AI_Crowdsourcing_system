@@ -62,7 +62,7 @@ async function requestTextCompletion(messages, options = {}) {
 }
 
 export async function sendVisionMessage(historyMessages, prompt, imageUrl) {
-  const dataUrl = readImageAsBase64(imageUrl)
+  const dataUrl = await readImageAsBase64(imageUrl)
   const imagePayload = dataUrl.slice(dataUrl.indexOf(',') + 1)
   const imageHash = crypto.createHash('sha256').update(imagePayload).digest('hex')
   const cached = await one(

@@ -16,8 +16,9 @@ export const memoryUpload = multer({
 
 export async function authMiddleware(req, res, next) {
   try {
-    const token = req.headers.authorization?.split(' ')[1]
-    if (!token) return res.status(401).json({ message: '请先登录' })
+    const parts = req.headers.authorization?.split(' ')
+    if (parts?.[0] !== 'Bearer' || !parts[1]) return res.status(401).json({ message: '请先登录' })
+    const token = parts[1]
     const payload = jwt.verify(token, JWT_SECRET)
     const user = await one(
       'SELECT id, student_id AS studentId, name, role, status, class_name AS className FROM users WHERE id = ?',

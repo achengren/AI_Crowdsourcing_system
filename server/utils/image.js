@@ -1,6 +1,6 @@
-import fs from 'node:fs'
+import fs from 'node:fs/promises'
 import path from 'node:path'
-import { UPLOADS_DIR } from '../config.js'
+import { UPLOADS_DIR, STORAGE_CONFIG } from '../config.js'
 
 export function parseImageContent(raw) {
   const m = raw.match(/^\[image:(.+?)\]\n/)
@@ -10,9 +10,17 @@ export function parseImageContent(raw) {
   return { imageUrl: null, text: raw }
 }
 
-export function readImageAsBase64(imageUrl) {
+export async function readImageAsBase64(imageUrl) {
+  if (STORAGE_CONFIG.driver !== 'local') {
+    const { default: storage } = await import('../services/storage.js')
+    const buffer = await storage.download(imageUrl)
+    const base64 = buffer.toString('base64')
+    const ext = path.extname(imageUrl).slice(1).toLowerCase()
+    const mime = ext === 'jpg' ? 'jpeg' : ext
+    return `data:image/${mime};base64,${base64}`
+  }
   const filePath = path.join(UPLOADS_DIR, path.basename(imageUrl))
-  const buffer = fs.readFileSync(filePath)
+  const buffer = await fs.readFile(filePath)
   const base64 = buffer.toString('base64')
   const ext = path.extname(filePath).slice(1).toLowerCase()
   const mime = ext === 'jpg' ? 'jpeg' : ext

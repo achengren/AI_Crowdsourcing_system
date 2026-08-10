@@ -113,7 +113,7 @@
         <a-form-item v-if="!editingUserId" label="初始密码" name="password" :rules="[{ required: true, min: 8, message: '至少 8 位' }]"><a-input-password v-model:value="userForm.password" /></a-form-item>
         <a-row :gutter="16"><a-col :span="12"><a-form-item label="角色"><a-select v-model:value="userForm.role"><a-select-option value="student">学生</a-select-option><a-select-option value="admin">管理员</a-select-option></a-select></a-form-item></a-col><a-col :span="12"><a-form-item label="班级"><a-input v-model:value="userForm.className" /></a-form-item></a-col></a-row>
         <a-form-item v-if="editingUserId" label="状态"><a-radio-group v-model:value="userForm.status"><a-radio value="active">启用</a-radio><a-radio value="disabled">停用</a-radio></a-radio-group></a-form-item>
-        <div class="modal-actions"><a-button @click="userVisible = false">取消</a-button><a-button type="primary" @click="saveUser">保存</a-button></div>
+        <div class="modal-actions"><a-button @click="userVisible = false">取消</a-button><a-button type="primary" :loading="savingUser" @click="saveUser">保存</a-button></div>
       </a-form>
     </a-modal>
 
@@ -251,11 +251,37 @@ async function loadDiaries() { const [r] = await Promise.all([getAdminDiaries({ 
 async function loadDiaryCompletion() { const r = await getAdminDiaryCompletion(completionDate.value.format('YYYY-MM-DD')); diaryCompletion.value = r.data.list || []; completionRequired.value = r.data.requiredCount || 3 }
 onMounted(loadOverview)
 
-const userVisible = ref(false), editingUserId = ref(null), userFormRef = ref()
+const userVisible = ref(false), editingUserId = ref(null), userFormRef = ref(), savingUser = ref(false)
+const disableUserId = ref(null)
 const userForm = reactive({ studentId: '', name: '', password: '', role: 'student', status: 'active', className: '' })
 function openUser(record = null) { editingUserId.value = record?.id || null; Object.assign(userForm, record || { studentId: '', name: '', password: '', role: 'student', status: 'active', className: '' }); userVisible.value = true }
-async function saveUser() { await userFormRef.value.validate(); if (editingUserId.value) await updateAdminUser(editingUserId.value, userForm); else await createAdminUser(userForm); userVisible.value = false; message.success('账号已保存'); await Promise.all([loadUsers(), loadOverview()]) }
-async function disableUser(record) { await disableAdminUser(record.id); await Promise.all([loadUsers(), loadOverview()]) }
+async function saveUser() {
+  if (savingUser.value) return
+  try {
+    await userFormRef.value.validate()
+  } catch { return } // 校验失败，表单已展示错误提示
+  savingUser.value = true
+  try {
+    if (editingUserId.value) await updateAdminUser(editingUserId.value, userForm)
+    else await createAdminUser(userForm)
+    userVisible.value = false
+    message.success('账号已保存')
+    await Promise.all([loadUsers(), loadOverview()])
+  } catch (err) {
+    message.error(err.response?.data?.message || '账号保存失败，请重试')
+  } finally { savingUser.value = false }
+}
+async function disableUser(record) {
+  if (disableUserId.value) return
+  disableUserId.value = record.id
+  try {
+    await disableAdminUser(record.id)
+    message.success('账号已停用')
+    await Promise.all([loadUsers(), loadOverview()])
+  } catch (err) {
+    message.error(err.response?.data?.message || '账号停用失败，请重试')
+  } finally { disableUserId.value = null }
+}
 async function importUsers(file) { const r = await importAdminUsers(file); message.success(`导入 ${r.data.created} 个账号，跳过 ${r.data.skipped} 个`); await Promise.all([loadUsers(), loadOverview()]); return false }
 const resetVisible = ref(false), resetTarget = ref(null), resetPassword = ref('')
 function openReset(record) { resetTarget.value = record; resetPassword.value = ''; resetVisible.value = true }
@@ -271,7 +297,19 @@ function taxonomyText(values, fallback, options, otherText = '') {
   const selected = Array.isArray(values) && values.length ? values : fallback ? [fallback] : []
   return selected.map(value => value === 'other' && otherText ? `其他：${otherText}` : optionLabel(options, value)).join('、') || '未标注'
 }
-async function setCaseStatus(record, status) { await updateAdminCaseStatus(record.id, status); if (selectedCase.value?.id === record.id) { selectedCase.value.status = status; selectedCase.value.withdrawnReason = '' }; message.success(status === 'published' ? '案例已发布' : '状态已更新'); await loadCases(); await loadOverview() }
+const settingCaseStatus = ref(false)
+async function setCaseStatus(record, status) {
+  if (settingCaseStatus.value) return
+  settingCaseStatus.value = true
+  try {
+    await updateAdminCaseStatus(record.id, status)
+    if (selectedCase.value?.id === record.id) { selectedCase.value.status = status; selectedCase.value.withdrawnReason = '' }
+    message.success(status === 'published' ? '案例已发布' : '状态已更新')
+    await loadCases(); await loadOverview()
+  } catch (err) {
+    message.error(err.response?.data?.message || '状态更新失败，请重试')
+  } finally { settingCaseStatus.value = false }
+}
 const withdrawVisible = ref(false), withdrawTarget = ref(null), withdrawReason = ref(''), withdrawing = ref(false)
 function openWithdraw(record) { withdrawTarget.value = record; withdrawReason.value = ''; withdrawVisible.value = true }
 async function confirmWithdraw() { if (!withdrawReason.value.trim()) return message.warning('请填写撤回原因'); withdrawing.value = true; try { await updateAdminCaseStatus(withdrawTarget.value.id, 'withdrawn', withdrawReason.value.trim()); withdrawVisible.value = false; if (selectedCase.value?.id === withdrawTarget.value.id) { selectedCase.value.status = 'withdrawn'; selectedCase.value.withdrawnReason = withdrawReason.value.trim() }; message.success('案例已撤回并保留历史记录'); await loadCases(); await loadOverview() } finally { withdrawing.value = false } }

@@ -203,22 +203,34 @@ const caseColumns = [
 ]
 
 async function loadData() {
-  const [caseRes, draftRes, diaryRes] = await Promise.all([getMySubmissions(), getSavedCaseDrafts(), getDiaries()])
-  const drafts = (draftRes.data || []).map(item => ({
-    ...item.payload,
-    id: item.id,
-    status: 'draft',
-    isEditorDraft: true,
-    createdAt: item.updatedAt,
-    annotationCount: item.payload?.annotations?.length || 0,
-  }))
-  submissions.value = [...drafts, ...(caseRes.data.list || [])]
-  diaries.value = diaryRes.data.list || []
-  diaryProgress.value = diaryRes.data.progress || []
-  stats[0].value = caseRes.data.stats?.total || 0
-  stats[1].value = caseRes.data.stats?.weekCount || 0
-  stats[2].value = diaries.value.length
-  stats[3].value = todaySubmitted.value
+  try {
+    // 使用 allSettled，任一请求失败不阻塞其余数据展示
+    const [caseRes, draftRes, diaryRes] = await Promise.allSettled([getMySubmissions(), getSavedCaseDrafts(), getDiaries()])
+    const drafts = draftRes.status === 'fulfilled' ? (draftRes.value.data || []).map(item => ({
+      ...item.payload,
+      id: item.id,
+      status: 'draft',
+      isEditorDraft: true,
+      createdAt: item.updatedAt,
+      annotationCount: item.payload?.annotations?.length || 0,
+    })) : []
+    const cases = caseRes.status === 'fulfilled' ? (caseRes.value.data.list || []) : []
+    submissions.value = [...drafts, ...cases]
+    if (caseRes.status === 'fulfilled') {
+      stats[0].value = caseRes.value.data.stats?.total || 0
+      stats[1].value = caseRes.value.data.stats?.weekCount || 0
+    }
+    if (diaryRes.status === 'fulfilled') {
+      diaries.value = diaryRes.value.data.list || []
+      diaryProgress.value = diaryRes.value.data.progress || []
+      stats[2].value = diaries.value.length
+    }
+    stats[3].value = todaySubmitted.value
+    const failed = [caseRes, draftRes, diaryRes].filter(r => r.status === 'rejected')
+    if (failed.length) message.warning('部分数据加载失败，请稍后刷新重试')
+  } catch (err) {
+    message.error(err.response?.data?.message || '数据加载失败，请重试')
+  }
 }
 onMounted(loadData)
 
@@ -240,6 +252,7 @@ function openDiary(record = null) {
 }
 
 async function saveDiary() {
+  if (savingDiary.value) return
   await diaryFormRef.value.validate()
   if (diaryForm.isGenaiRelated && !diaryForm.genaiPlatform) return message.warning('请选择 GenAI 平台')
   savingDiary.value = true
@@ -250,13 +263,39 @@ async function saveDiary() {
     message.success('信息需求记录已保存')
     diaryVisible.value = false
     await loadData()
+  } catch (err) {
+    message.error(err.response?.data?.message || '保存失败，请重试')
   } finally { savingDiary.value = false }
 }
 
-async function removeDiary(id) { await deleteDiary(id); await loadData() }
+async function removeDiary(id) {
+  try {
+    await deleteDiary(id)
+    message.success('记录已删除')
+    await loadData()
+  } catch (err) {
+    message.error(err.response?.data?.message || '删除失败，请重试')
+  }
+}
 function convertDiary(record) { router.push({ path: '/cases/new', query: { diaryId: record.id } }) }
-async function removeCase(id) { await deleteSubmission(id); await loadData() }
-async function removeDraft(id) { await deleteCaseDraft(id); await loadData() }
+async function removeCase(id) {
+  try {
+    await deleteSubmission(id)
+    message.success('案例已删除')
+    await loadData()
+  } catch (err) {
+    message.error(err.response?.data?.message || '删除失败，请重试')
+  }
+}
+async function removeDraft(id) {
+  try {
+    await deleteCaseDraft(id)
+    message.success('草稿已删除')
+    await loadData()
+  } catch (err) {
+    message.error(err.response?.data?.message || '删除失败，请重试')
+  }
+}
 function continueDraft(record) { router.push({ path: '/cases/new', query: { draftId: record.id } }) }
 
 const caseVisible = ref(false)
@@ -274,11 +313,15 @@ function statusColor(value) { return ({ submitted: 'orange', published: 'green',
 const passwordVisible = ref(false)
 const passwordForm = reactive({ currentPassword: '', newPassword: '' })
 async function savePassword() {
-  await changePassword(passwordForm)
-  passwordVisible.value = false
-  passwordForm.currentPassword = ''
-  passwordForm.newPassword = ''
-  message.success('密码已更新')
+  try {
+    await changePassword(passwordForm)
+    passwordVisible.value = false
+    passwordForm.currentPassword = ''
+    passwordForm.newPassword = ''
+    message.success('密码已更新')
+  } catch (err) {
+    message.error(err.response?.data?.message || '密码修改失败，请重试')
+  }
 }
 </script>
 

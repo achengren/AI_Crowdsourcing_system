@@ -60,10 +60,13 @@ async function runMigrations() {
   for (const file of files) {
     if (applied.has(file)) continue
     const sql = await fs.readFile(path.join(migrationDir, file), 'utf8')
-    await transaction(async connection => {
-      await connection.query(sql)
-      await connection.execute('INSERT INTO schema_migrations (name) VALUES (?)', [file])
-    })
+    const migConnection = await mysql.createConnection({ ...DB_CONFIG, multipleStatements: true, charset: 'utf8mb4', timezone: '+08:00' })
+    try {
+      await migConnection.query(sql)
+      await migConnection.execute('INSERT INTO schema_migrations (name) VALUES (?)', [file])
+    } finally {
+      await migConnection.end()
+    }
     console.log(`数据库迁移完成: ${file}`)
   }
 }
@@ -87,7 +90,7 @@ export async function initDb() {
     queueLimit: 100,
     charset: 'utf8mb4',
     timezone: '+08:00',
-    multipleStatements: true,
+    multipleStatements: false,
   })
   await query('SELECT 1')
   await runMigrations()

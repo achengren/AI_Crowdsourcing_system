@@ -395,6 +395,7 @@ router.get('/:id/comments', async (req, res) => {
 router.post('/:id/comments', async (req, res) => {
   const content = String(req.body.content || '').trim()
   if (!content) return res.status(400).json({ message: '评论内容不能为空' })
+  if (content.length > 4000) return res.status(400).json({ message: '评论内容不能超过 4000 字' })
   const item = await getPublishedCase(req.params.id)
   if (!item) return res.status(404).json({ message: '案例不存在或已撤回' })
   const id = genId()

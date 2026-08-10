@@ -17,10 +17,9 @@ router.post('/login', async (req, res) => {
     'SELECT id, student_id AS studentId, name, role, status, class_name AS className, password_hash AS passwordHash FROM users WHERE student_id = ?',
     [parsed.data.studentId]
   )
-  if (!row || !bcrypt.compareSync(parsed.data.password, row.passwordHash)) {
+  if (!row || !bcrypt.compareSync(parsed.data.password, row.passwordHash) || row.status !== 'active') {
     return res.status(400).json({ message: '账号或密码错误' })
   }
-  if (row.status !== 'active') return res.status(403).json({ message: '账号已停用，请联系管理员' })
 
   await query('UPDATE users SET last_login_at = CURRENT_TIMESTAMP(3) WHERE id = ?', [row.id])
   const user = {

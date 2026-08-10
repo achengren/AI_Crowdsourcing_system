@@ -196,7 +196,7 @@ router.get('/conversations/:id/messages', async (req, res) => {
             m.thinking_enabled AS thinkingEnabled, m.created_at AS createdAt,
             COALESCE(r.score, 0) AS rating
      FROM messages m LEFT JOIN message_ratings r ON r.message_id = m.id
-     WHERE m.conversation_id = ? ORDER BY m.created_at`,
+     WHERE m.conversation_id = ? ORDER BY m.created_at, FIELD(m.role, 'user', 'assistant')`,
     [req.params.id]
   )
   await writeAudit(req.user.id, 'conversation.view', 'conversation', req.params.id)
@@ -400,7 +400,7 @@ router.get('/export', async (req, res) => {
                     FROM conversations c JOIN users u ON u.id = c.user_id
                     JOIN messages m ON m.conversation_id = c.id
                     LEFT JOIN message_ratings r ON r.message_id = m.id
-                    ORDER BY c.created_at, m.created_at`,
+                    ORDER BY c.created_at, m.created_at, FIELD(m.role, 'user', 'assistant')`,
     ratings: `SELECT u.student_id AS 账号, u.name AS 姓名, u.class_name AS 班级,
                      c.id AS 会话ID, c.title AS 会话标题, m.id AS 回复ID,
                      m.provider AS 提供商, m.model AS 模型, r.score AS 满意度评分,

@@ -58,7 +58,7 @@ router.get('/:id/messages', authMiddleware, async (req, res) => {
             m.thinking_enabled AS thinkingEnabled, m.created_at AS createdAt,
             COALESCE(r.score, 0) AS rating
      FROM messages m LEFT JOIN message_ratings r ON r.message_id = m.id
-     WHERE m.conversation_id = ? ORDER BY m.created_at ASC`,
+     WHERE m.conversation_id = ? ORDER BY m.created_at ASC, FIELD(m.role, 'user', 'assistant')`,
     [req.params.id]
   )
   res.json({ code: 0, data: list.map(item => ({ ...item, thinkingEnabled: Boolean(item.thinkingEnabled) })) })

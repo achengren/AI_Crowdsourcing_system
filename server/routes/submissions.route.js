@@ -176,7 +176,7 @@ router.get('/draft/from-message/:messageId', authMiddleware, async (req, res) =>
   const sourceUserMessage = extractUserMessage(userMessage?.content)
   const contextRows = await query(
     `SELECT id, role, content, created_at AS createdAt FROM messages
-     WHERE conversation_id = ? AND created_at <= ? ORDER BY created_at ASC`,
+     WHERE conversation_id = ? AND created_at <= ? ORDER BY created_at ASC, FIELD(role, 'user', 'assistant')`,
     [assistant.conversationId, assistant.createdAt]
   )
   res.json({

@@ -92,6 +92,8 @@
             placeholder="发送消息..."
             :auto-size="{ minRows: 1, maxRows: 6 }"
             @press-enter="onEnterPress"
+            @compositionstart="isComposing = true"
+            @compositionend="isComposing = false"
           />
           <a-button type="primary" :loading="sending" @click="onSend" class="send-btn">
             <SendOutlined />
@@ -115,7 +117,7 @@
 </template>
 
 <script setup>
-import { ref, nextTick, onMounted, onUnmounted, watch } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted, onActivated, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { SendOutlined, PictureOutlined, CloseOutlined, ExclamationCircleOutlined, UploadOutlined, BulbOutlined, QuestionCircleOutlined } from '@ant-design/icons-vue'
@@ -140,6 +142,8 @@ const messages = ref([])
 const messageList = ref(null)
 const activeConvId = ref(null)
 const fileInput = ref(null)
+const isComposing = ref(false)
+let loadToken = 0
 
 onMounted(async () => {
   // 监听侧边栏的"新建对话"事件
@@ -168,10 +172,19 @@ watch(() => route.query.conv, async (convId) => {
   if (convId && convId !== activeConvId.value) await loadConversation(convId)
 })
 
+onActivated(() => {
+  const convId = route.query.conv
+  if (!convId && activeConvId.value) {
+    onNewChat()
+  }
+})
+
 async function loadConversation(convId) {
+  const token = ++loadToken
   activeConvId.value = convId
   try {
     const res = await getMessages(convId)
+    if (token !== loadToken) return
     messages.value = res.data.map(m => {
       const parsed = parseMsgContent(m.content)
       return {
@@ -201,7 +214,7 @@ function onNewChat() {
 }
 
 function onEnterPress(e) {
-  if (!e.shiftKey) {
+  if (!e.shiftKey && !isComposing.value) {
     e.preventDefault()
     onSend()
   }
@@ -212,6 +225,7 @@ async function onSend() {
   const img = imageUrl.value
   if ((!text && !img) || sending.value) return
 
+  const targetConvId = activeConvId.value
   messages.value.push({ role: 'user', content: text, imageUrl: img })
   input.value = ''
   imageUrl.value = ''
@@ -222,7 +236,8 @@ async function onSend() {
   await scrollToBottom()
 
   try {
-    const res = await sendMessage({ prompt: text, conversationId: activeConvId.value, imageUrl: img })
+    const res = await sendMessage({ prompt: text, conversationId: targetConvId, imageUrl: img })
+    if (activeConvId.value !== targetConvId && targetConvId !== null) return
     messages.value.push({
       id: res.data.messageId,
       role: 'ai',
@@ -234,11 +249,12 @@ async function onSend() {
       modality: res.data.modality,
     })
 
-    if (!activeConvId.value) {
+    if (!targetConvId) {
       activeConvId.value = res.data.conversationId
       router.replace({ query: { conv: res.data.conversationId } })
     }
   } catch (error) {
+    if (activeConvId.value !== targetConvId && targetConvId !== null) return
     const stage = error.response?.data?.stage
     messages.value.push({ role: 'ai', content: stage === 'vision' ? '图片识别失败，请重试' : '回答生成失败，请重试', rating: 0 })
   } finally {

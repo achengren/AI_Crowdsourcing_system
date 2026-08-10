@@ -86,6 +86,7 @@
         </div>
       </div>
 
+      <a-spin v-if="loading" size="large" style="display: flex; justify-content: center; margin-top: 64px" />
       <a-empty v-if="!loading && cases.length === 0" description="暂无案例，快来提交第一个吧" style="margin-top: 64px" />
 
       <div class="pagination" v-if="total > pageSize">
@@ -387,6 +388,7 @@ async function openSubmitFromQuery() {
 
 // keep-alive 激活时检查（覆盖首次挂载和从 Chat 页切回）
 onActivated(() => {
+  loadCases()
   openSubmitFromQuery()
 })
 
@@ -406,10 +408,12 @@ const cases = ref([])
 const page = ref(1)
 const pageSize = ref(12)
 const total = ref(0)
+let loadCasesSeq = 0
 
 onMounted(() => { loadCases(); openSubmitFromQuery() })
 
 async function loadCases() {
+  const seq = ++loadCasesSeq
   loading.value = true
   try {
     const res = await getCases({
@@ -421,10 +425,11 @@ async function loadCases() {
       keyword: search.value,
       sortBy: sortBy.value,
     })
+    if (seq !== loadCasesSeq) return // 忽略过期响应，防止旧筛选结果覆盖最新结果
     cases.value = res.data.list || []
     total.value = res.data.total || 0
   } catch { /* ignore */ } finally {
-    loading.value = false
+    if (seq === loadCasesSeq) loading.value = false
   }
 }
 
@@ -494,9 +499,13 @@ function continueDraft(id) {
 }
 
 async function removeDraft(id) {
-  await deleteCaseDraft(id)
-  caseDrafts.value = caseDrafts.value.filter(item => item.id !== id)
-  message.success('草稿已删除')
+  try {
+    await deleteCaseDraft(id)
+    caseDrafts.value = caseDrafts.value.filter(item => item.id !== id)
+    message.success('草稿已删除')
+  } catch (err) {
+    message.error(err.response?.data?.message || '草稿删除失败，请重试')
+  }
 }
 
 function displayDraftPlatform(draft) {
@@ -579,6 +588,7 @@ function onPreviewImage(fileOrList, idx) {
 }
 
 async function handleSubmit() {
+  if (submitting.value) return
   try {
     await formRef.value.validate()
     await onSubmit()
@@ -664,6 +674,8 @@ async function onImportConversationText() {
     const res = await importConversationText({ text: rawConversation.value, platform: form.platform || '' })
     applyImportedConversation(res.data)
     message.success('对话内容已识别，请核对后批注')
+  } catch (err) {
+    message.error(err.response?.data?.message || '对话内容识别失败，请检查内容后重试')
   } finally { importingText.value = false }
 }
 
@@ -683,6 +695,8 @@ async function onImportScreenshots() {
     }
     screenshotFileList.value = []
     message.success('截图内容已识别，请核对后批注')
+  } catch (err) {
+    message.error(err.response?.data?.message || '截图识别失败，请重试')
   } finally { recognizingScreenshots.value = false }
 }
 
@@ -700,6 +714,8 @@ async function onCreateDetailAnnotation(annotation) {
     detailCase.value.annotations = [...(detailCase.value.annotations || []), res.data]
     detailCase.value.annotationCount = Number(detailCase.value.annotationCount || 0) + 1
     message.success('批注已添加')
+  } catch (err) {
+    message.error(err.response?.data?.message || '批注添加失败，请重试')
   } finally { annotationCreating.value = false }
 }
 
@@ -707,12 +723,16 @@ async function onVoteAnnotation(annotation, vote) {
   if (annotation.isOwn) return
   const previousAgree = Number(annotation.agreeCount || 0)
   const previousDisagree = Number(annotation.disagreeCount || 0)
-  const res = await voteCaseAnnotation(detailCase.value.id, annotation.id, vote)
-  annotation.userVote = res.data.userVote
-  annotation.agreeCount = res.data.agreeCount
-  annotation.disagreeCount = res.data.disagreeCount
-  detailCase.value.annotationAgreeCount = Math.max(0, Number(detailCase.value.annotationAgreeCount || 0) + res.data.agreeCount - previousAgree)
-  detailCase.value.annotationDisagreeCount = Math.max(0, Number(detailCase.value.annotationDisagreeCount || 0) + res.data.disagreeCount - previousDisagree)
+  try {
+    const res = await voteCaseAnnotation(detailCase.value.id, annotation.id, vote)
+    annotation.userVote = res.data.userVote
+    annotation.agreeCount = res.data.agreeCount
+    annotation.disagreeCount = res.data.disagreeCount
+    detailCase.value.annotationAgreeCount = Math.max(0, Number(detailCase.value.annotationAgreeCount || 0) + res.data.agreeCount - previousAgree)
+    detailCase.value.annotationDisagreeCount = Math.max(0, Number(detailCase.value.annotationDisagreeCount || 0) + res.data.disagreeCount - previousDisagree)
+  } catch (err) {
+    message.error(err.response?.data?.message || '投票失败，请重试')
+  }
 }
 
 function onAnnotationCommentCountChange(annotation, delta) {
@@ -721,10 +741,14 @@ function onAnnotationCommentCountChange(annotation, delta) {
 }
 
 async function onWithdrawAnnotation(annotation) {
-  await withdrawCaseAnnotation(detailCase.value.id, annotation.id)
-  detailCase.value.annotations = detailCase.value.annotations.filter(item => item.id !== annotation.id)
-  detailCase.value.annotationCount = Math.max(0, Number(detailCase.value.annotationCount || 0) - 1)
-  message.success('批注已撤回，历史记录仍由系统保留')
+  try {
+    await withdrawCaseAnnotation(detailCase.value.id, annotation.id)
+    detailCase.value.annotations = detailCase.value.annotations.filter(item => item.id !== annotation.id)
+    detailCase.value.annotationCount = Math.max(0, Number(detailCase.value.annotationCount || 0) - 1)
+    message.success('批注已撤回，历史记录仍由系统保留')
+  } catch (err) {
+    message.error(err.response?.data?.message || '批注撤回失败，请重试')
+  }
 }
 
 // 工具函数

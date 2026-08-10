@@ -18,11 +18,15 @@ client.interceptors.response.use(
   (res) => res.data,
   (err) => {
     const msg = err.response?.data?.message || '请求失败，请稍后重试'
-    message.error(msg)
     if (err.response?.status === 401) {
-      localStorage.removeItem('token')
-      window.location.href = '/login'
+      const isLoginRequest = err.config?.url === '/auth/login'
+      if (!isLoginRequest) {
+        localStorage.removeItem('token')
+        window.location.href = '/login'
+        return Promise.reject(err)
+      }
     }
+    message.error(msg)
     return Promise.reject(err)
   }
 )
