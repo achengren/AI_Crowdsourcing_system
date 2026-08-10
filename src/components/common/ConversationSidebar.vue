@@ -48,7 +48,8 @@
         @click="navigate('/gallery')"
       >
         <FolderOutlined />
-        <span class="nav-label">案例<span v-if="draftCount > 0" class="nav-dot"></span></span>
+        <span>案例</span>
+        <span v-if="draftCount > 0" class="nav-dot"></span>
       </div>
       <div
         :class="['sidebar-nav-item', { active: currentRoute === '/profile' }]"
@@ -275,6 +276,7 @@ function onLogout() {
 }
 
 .sidebar-nav-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -309,20 +311,14 @@ function onLogout() {
 
 .logout-btn:hover { color: #fff; }
 
-.nav-label {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-
 .nav-dot {
-  display: inline-block;
+  position: absolute;
+  top: 6px;
+  right: 6px;
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #fff;
-  margin-left: 6px;
-  flex-shrink: 0;
+  background: #ff4d4f;
 }
 
 @media (max-width: 760px) {
