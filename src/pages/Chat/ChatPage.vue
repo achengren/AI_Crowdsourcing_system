@@ -127,7 +127,7 @@ import { sendMessage, getConversations, getMessages, getSolutionSuggestion, rate
 import { uploadImage } from '../../api/submission'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import hljs from 'highlight.js'
+import hljs from 'highlight.js/lib/common'
 import 'highlight.js/styles/github-dark.css'
 
 const router = useRouter()

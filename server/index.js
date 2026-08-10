@@ -79,6 +79,7 @@ if (NODE_ENV === 'production' && fs.existsSync(DIST_DIR)) {
 app.use((error, _req, res, _next) => {
   console.error(error)
   if (error.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ message: '文件大小超过限制' })
+  if (error.code === 'INVALID_IMAGE') return res.status(400).json({ message: error.message })
   res.status(500).json({ message: NODE_ENV === 'production' ? '服务器内部错误' : error.message })
 })
 
