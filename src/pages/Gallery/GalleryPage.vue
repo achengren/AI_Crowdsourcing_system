@@ -35,9 +35,12 @@
 
       <div class="card-grid">
         <!-- + 上传卡片 -->
-        <div class="upload-card" @click="openManualSubmit">
-          <PlusOutlined class="upload-icon" />
-          <span v-if="draftCount > 0">您有 {{ draftCount }} 份草稿待提交</span>
+        <div class="upload-card" :class="{ 'has-draft': draftCount > 0 }" @click="openManualSubmit">
+          <a-badge :count="draftCount" :overflow-count="99" v-if="draftCount > 0">
+            <PlusOutlined class="upload-icon" />
+          </a-badge>
+          <PlusOutlined v-else class="upload-icon" />
+          <span v-if="draftCount > 0">{{ draftCount }} 份草稿待提交</span>
           <span v-else>提交案例</span>
         </div>
 
@@ -872,6 +875,16 @@ function displayPlatform(item) {
 
 .upload-icon {
   font-size: 36px;
+}
+
+.upload-card.has-draft {
+  border-color: var(--hib-red);
+  border-style: solid;
+  background: rgba(173, 70, 82, 0.03);
+}
+
+.upload-card.has-draft :deep(.ant-badge-count) {
+  box-shadow: 0 0 0 2px #fff;
 }
 
 /* 案例卡片 */
