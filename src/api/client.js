@@ -4,6 +4,7 @@ import { message } from 'ant-design-vue'
 const client = axios.create({
   baseURL: '/api',
   timeout: 30000,
+  withCredentials: true,
 })
 
 client.interceptors.request.use((config) => {

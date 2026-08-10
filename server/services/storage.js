@@ -6,6 +6,14 @@ import { genId } from '../db.js'
 
 let s3Client
 
+const MIME_TYPES = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+}
+
 function extensionFor(file) {
   const original = path.extname(file.originalname || '').toLowerCase()
   if (/^\.[a-z0-9]{1,8}$/.test(original)) return original
@@ -19,8 +27,8 @@ function extensionFor(file) {
 
 function createS3Client() {
   const { s3 } = STORAGE_CONFIG
-  if (!s3.bucket || !s3.accessKeyId || !s3.secretAccessKey || !s3.publicBaseUrl) {
-    throw new Error('S3 存储缺少 bucket、访问密钥或公开访问地址配置')
+  if (!s3.bucket || !s3.accessKeyId || !s3.secretAccessKey) {
+    throw new Error('S3 存储缺少 bucket 或访问密钥配置')
   }
   return new S3Client({
     region: s3.region,
@@ -28,6 +36,28 @@ function createS3Client() {
     forcePathStyle: s3.forcePathStyle,
     credentials: { accessKeyId: s3.accessKeyId, secretAccessKey: s3.secretAccessKey },
   })
+}
+
+function storedFilename(url) {
+  if (!url) return ''
+  const pathname = new URL(url, 'http://local').pathname
+  const filename = path.basename(pathname)
+  return /^[a-f0-9]{32}\.(png|jpe?g|gif|webp)$/i.test(filename) ? filename : ''
+}
+
+function s3KeyForUrl(url) {
+  const filename = storedFilename(url)
+  if (!filename) return ''
+  const publicPrefix = `${STORAGE_CONFIG.s3.publicBaseUrl}/`
+  if (STORAGE_CONFIG.s3.publicBaseUrl && url.startsWith(publicPrefix)) {
+    const key = decodeURIComponent(url.slice(publicPrefix.length))
+    return key.startsWith(`${STORAGE_CONFIG.s3.keyPrefix}/`) ? key : ''
+  }
+  return `${STORAGE_CONFIG.s3.keyPrefix}/${filename}`
+}
+
+export function storedObjectContentType(url) {
+  return MIME_TYPES[path.extname(storedFilename(url)).toLowerCase()] || 'application/octet-stream'
 }
 
 export async function initStorage() {
@@ -57,9 +87,25 @@ export async function storeUpload(file) {
     Key: key,
     Body: file.buffer,
     ContentType: file.mimetype,
-    CacheControl: 'public, max-age=604800',
+    CacheControl: 'private, max-age=3600',
   }))
-  return { key, url: `${STORAGE_CONFIG.s3.publicBaseUrl}/${key}` }
+  return { key, url: `/uploads/${filename}` }
+}
+
+export async function downloadStoredObject(url) {
+  const filename = storedFilename(url)
+  if (!filename) throw new Error('无效的图片路径')
+  if (STORAGE_CONFIG.driver === 'local') {
+    const pathname = new URL(url, 'http://local').pathname
+    if (!pathname.startsWith('/uploads/')) throw new Error('无效的本地图片路径')
+    return fs.readFile(path.join(UPLOADS_DIR, filename))
+  }
+
+  const key = s3KeyForUrl(url)
+  if (!key) throw new Error('无效的 S3 图片路径')
+  const response = await s3Client.send(new GetObjectCommand({ Bucket: STORAGE_CONFIG.s3.bucket, Key: key }))
+  if (!response.Body) throw new Error('S3 图片内容为空')
+  return Buffer.from(await response.Body.transformToByteArray())
 }
 
 export async function deleteStoredObject(url) {
@@ -71,27 +117,8 @@ export async function deleteStoredObject(url) {
     return
   }
 
-  const prefix = `${STORAGE_CONFIG.s3.publicBaseUrl}/`
-  if (!url.startsWith(prefix)) return
-  const key = decodeURIComponent(url.slice(prefix.length))
-  if (!key.startsWith(`${STORAGE_CONFIG.s3.keyPrefix}/`)) return
+  const key = s3KeyForUrl(url)
+  if (!key) return
   await s3Client.send(new DeleteObjectCommand({ Bucket: STORAGE_CONFIG.s3.bucket, Key: key }))
 }
 
-export async function download(url) {
-  if (!url) throw new Error('无效的文件 URL')
-  if (STORAGE_CONFIG.driver === 'local') {
-    if (!url.startsWith('/uploads/')) throw new Error('无效的本地文件 URL')
-    const filename = path.basename(new URL(url, 'http://local').pathname)
-    return await fs.readFile(path.join(UPLOADS_DIR, filename))
-  }
-  const prefix = `${STORAGE_CONFIG.s3.publicBaseUrl}/`
-  if (!url.startsWith(prefix)) throw new Error('无效的 S3 文件 URL')
-  const key = decodeURIComponent(url.slice(prefix.length))
-  const response = await s3Client.send(new GetObjectCommand({ Bucket: STORAGE_CONFIG.s3.bucket, Key: key }))
-  const chunks = []
-  for await (const chunk of response.Body) {
-    chunks.push(chunk)
-  }
-  return Buffer.concat(chunks)
-}

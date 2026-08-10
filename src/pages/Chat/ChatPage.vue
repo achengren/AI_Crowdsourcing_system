@@ -145,6 +145,7 @@ const activeConvId = ref(null)
 const fileInput = ref(null)
 const isComposing = ref(false)
 let loadToken = 0
+let conversationGeneration = 0
 
 onMounted(async () => {
   // 监听侧边栏的"新建对话"事件
@@ -182,6 +183,7 @@ onActivated(() => {
 
 async function loadConversation(convId) {
   const token = ++loadToken
+  conversationGeneration += 1
   activeConvId.value = convId
   try {
     const res = await getMessages(convId)
@@ -208,6 +210,8 @@ async function loadConversation(convId) {
 }
 
 function onNewChat() {
+  loadToken += 1
+  conversationGeneration += 1
   activeConvId.value = null
   messages.value = []
   input.value = ''
@@ -227,6 +231,7 @@ async function onSend() {
   if ((!text && !img) || sending.value) return
 
   const targetConvId = activeConvId.value
+  const targetGeneration = conversationGeneration
   messages.value.push({ role: 'user', content: text, imageUrl: img })
   input.value = ''
   imageUrl.value = ''
@@ -238,7 +243,7 @@ async function onSend() {
 
   try {
     const res = await sendMessage({ prompt: text, conversationId: targetConvId, imageUrl: img })
-    if (activeConvId.value !== targetConvId && targetConvId !== null) return
+    if (targetGeneration !== conversationGeneration || activeConvId.value !== targetConvId) return
     messages.value.push({
       id: res.data.messageId,
       role: 'ai',
@@ -255,7 +260,7 @@ async function onSend() {
       router.replace({ query: { conv: res.data.conversationId } })
     }
   } catch (error) {
-    if (activeConvId.value !== targetConvId && targetConvId !== null) return
+    if (targetGeneration !== conversationGeneration || activeConvId.value !== targetConvId) return
     const stage = error.response?.data?.stage
     messages.value.push({ role: 'ai', content: stage === 'vision' ? '图片识别失败，请重试' : '回答生成失败，请重试', rating: 0 })
   } finally {

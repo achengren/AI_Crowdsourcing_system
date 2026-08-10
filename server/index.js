@@ -3,13 +3,14 @@ import cors from 'cors'
 import fs from 'node:fs'
 import rateLimit from 'express-rate-limit'
 import { closeDb, initDb, one } from './db.js'
-import { DIST_DIR, NODE_ENV, PORT, STORAGE_CONFIG, UPLOADS_DIR, validateRuntimeConfig } from './config.js'
+import { DIST_DIR, NODE_ENV, PORT, validateRuntimeConfig } from './config.js'
 import { getAiLoad } from './services/aiLimiter.js'
 import { initStorage } from './services/storage.js'
+import { authMiddleware } from './middleware.js'
 import authRoutes from './routes/auth.route.js'
 import conversationRoutes from './routes/conversations.route.js'
 import chatRoutes from './routes/chat.route.js'
-import uploadRoutes from './routes/upload.route.js'
+import uploadRoutes, { serveUpload } from './routes/upload.route.js'
 import linkParseRoutes from './routes/linkParse.route.js'
 import submissionRoutes from './routes/submissions.route.js'
 import caseRoutes from './routes/cases.route.js'
@@ -23,7 +24,7 @@ app.set('trust proxy', 1)
 const corsOrigin = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').filter(Boolean)
   : NODE_ENV === 'production' ? false : true
-app.use(cors({ origin: corsOrigin }))
+app.use(cors({ origin: corsOrigin, credentials: true }))
 app.use(express.json({ limit: '2mb' }))
 
 app.use((_req, res, next) => {
@@ -32,9 +33,7 @@ app.use((_req, res, next) => {
   next()
 })
 
-if (STORAGE_CONFIG.driver === 'local') {
-  app.use('/uploads', express.static(UPLOADS_DIR, { maxAge: NODE_ENV === 'production' ? '7d' : 0 }))
-}
+app.get('/uploads/:filename', authMiddleware, serveUpload)
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,

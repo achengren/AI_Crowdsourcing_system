@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken'
 import { z } from 'zod'
 import { one, query } from '../db.js'
 import { JWT_SECRET } from '../config.js'
-import { authMiddleware } from '../middleware.js'
+import { authMiddleware, clearAuthCookie, setAuthCookie } from '../middleware.js'
 
 const router = Router()
 const loginSchema = z.object({ studentId: z.string().trim().min(1), password: z.string().min(1) })
@@ -30,6 +30,7 @@ router.post('/login', async (req, res) => {
     className: row.className,
   }
   const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: '8h' })
+  setAuthCookie(res, token)
   res.json({ code: 0, data: { token, user } })
 })
 
@@ -47,6 +48,9 @@ router.post('/change-password', authMiddleware, async (req, res) => {
   res.json({ code: 0, data: null })
 })
 
-router.post('/logout', (_req, res) => res.json({ code: 0, data: null }))
+router.post('/logout', (_req, res) => {
+  clearAuthCookie(res)
+  res.json({ code: 0, data: null })
+})
 
 export default router

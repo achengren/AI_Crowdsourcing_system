@@ -319,7 +319,7 @@ function statusLabel(value) { return ({ draft: '草稿', submitted: '旧待审�
 function statusColor(value) { return ({ draft: 'default', submitted: 'orange', published: 'green', rejected: 'red', withdrawn: 'default' })[value] }
 function displayPlatform(record) { return platformLabel(record.platform, record.platformOther) }
 function backToStudent() { router.push('/chat') }
-function logout() { auth.logout(); router.push('/login') }
+async function logout() { await auth.logout(); await router.push('/login') }
 </script>
 
 <style scoped>

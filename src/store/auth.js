@@ -21,7 +21,15 @@ export const useAuthStore = defineStore('auth', {
       this.user = { ...this.user, ...patch }
       localStorage.setItem('user', JSON.stringify(this.user))
     },
-    logout() {
+    async logout() {
+      const token = this.token
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        })
+      } catch { /* Local state must still be cleared when the server is unavailable. */ }
       localStorage.removeItem('token')
       localStorage.removeItem('user')
       this.token = null

@@ -6,6 +6,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 export const NODE_ENV = process.env.NODE_ENV || 'development'
 export const JWT_SECRET = process.env.JWT_SECRET || 'local-development-only-change-me'
+export const AUTH_COOKIE_NAME = process.env.AUTH_COOKIE_NAME || 'hib_session'
+export const AUTH_COOKIE_SECURE = process.env.AUTH_COOKIE_SECURE
+  ? process.env.AUTH_COOKIE_SECURE === 'true'
+  : NODE_ENV === 'production'
 export const PORT = Number(process.env.PORT || 3001)
 export const UPLOADS_DIR = path.join(__dirname, 'uploads')
 export const DIST_DIR = path.join(__dirname, '..', 'dist')

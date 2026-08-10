@@ -113,12 +113,11 @@ S3_ENDPOINT=https://your-s3-endpoint.example.com
 S3_BUCKET=ai-crowdsourcing
 S3_ACCESS_KEY_ID=replace-me
 S3_SECRET_ACCESS_KEY=replace-me
-S3_PUBLIC_BASE_URL=https://cdn.example.com
 S3_FORCE_PATH_STYLE=false
 S3_KEY_PREFIX=uploads
 ```
 
-`S3_PUBLIC_BASE_URL` 必须能够公开读取已上传对象；生产环境建议在对象存储前配置 CDN 和 HTTPS。
+应用始终通过需要登录的 `/uploads/...` 路径读取图片，S3 Bucket 应保持私有。仅迁移旧版公开 S3 URL 时才需要临时配置 `S3_PUBLIC_BASE_URL`。生产环境默认使用带 `Secure` 的 HttpOnly 会话 Cookie，因此域名必须启用 HTTPS；仅在封闭的 HTTP 测试环境中设置 `AUTH_COOKIE_SECURE=false`。
 
 ## Docker 部署
 

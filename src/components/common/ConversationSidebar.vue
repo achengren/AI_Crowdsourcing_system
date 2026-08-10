@@ -164,10 +164,10 @@ function navigate(path) {
   router.push(path)
 }
 
-function onLogout() {
+async function onLogout() {
   mobileOpen.value = false
-  auth.logout()
-  router.push('/login')
+  await auth.logout()
+  await router.push('/login')
 }
 </script>
 
