@@ -37,7 +37,8 @@
         <!-- + 上传卡片 -->
         <div class="upload-card" @click="openManualSubmit">
           <PlusOutlined class="upload-icon" />
-          <span>提交案例</span>
+          <span v-if="draftCount > 0">您有 {{ draftCount }} 份草稿待提交</span>
+          <span v-else>提交案例</span>
         </div>
 
         <!-- 案例卡片 -->
@@ -389,6 +390,7 @@ async function openSubmitFromQuery() {
 // keep-alive 激活时检查（覆盖首次挂载和从 Chat 页切回）
 onActivated(() => {
   loadCases()
+  loadDraftCount()
   openSubmitFromQuery()
 })
 
@@ -410,7 +412,7 @@ const pageSize = ref(12)
 const total = ref(0)
 let loadCasesSeq = 0
 
-onMounted(() => { loadCases(); openSubmitFromQuery() })
+onMounted(() => { loadCases(); loadDraftCount(); openSubmitFromQuery() })
 
 async function loadCases() {
   const seq = ++loadCasesSeq
@@ -478,11 +480,20 @@ function resetForm() {
 const draftPickerVisible = ref(false)
 const draftsLoading = ref(false)
 const caseDrafts = ref([])
+const draftCount = ref(0)
+
+async function loadDraftCount() {
+  try {
+    const res = await getSavedCaseDrafts()
+    draftCount.value = (res.data || []).length
+  } catch { /* ignore */ }
+}
 
 async function openManualSubmit() {
   draftsLoading.value = true
   try {
     caseDrafts.value = (await getSavedCaseDrafts()).data || []
+    draftCount.value = caseDrafts.value.length
     if (caseDrafts.value.length) draftPickerVisible.value = true
     else startNewCase()
   } finally { draftsLoading.value = false }
@@ -502,6 +513,7 @@ async function removeDraft(id) {
   try {
     await deleteCaseDraft(id)
     caseDrafts.value = caseDrafts.value.filter(item => item.id !== id)
+    draftCount.value = caseDrafts.value.length
     message.success('草稿已删除')
   } catch (err) {
     message.error(err.response?.data?.message || '草稿删除失败，请重试')
