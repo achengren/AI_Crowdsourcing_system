@@ -48,7 +48,7 @@
         @click="navigate('/gallery')"
       >
         <FolderOutlined />
-        <span>案例</span>
+        <span class="nav-label">案例<span v-if="draftCount > 0" class="nav-dot"></span></span>
       </div>
       <div
         :class="['sidebar-nav-item', { active: currentRoute === '/profile' }]"
@@ -79,6 +79,7 @@ import { message } from 'ant-design-vue'
 import { CloseOutlined, EditOutlined, FolderOutlined, MenuOutlined, PlusOutlined, SettingOutlined, UserOutlined } from '@ant-design/icons-vue'
 import { useAuthStore } from '../../store/auth'
 import { getConversations, updateConversationTitle } from '../../api/chat'
+import { getSavedCaseDrafts } from '../../api/submission'
 
 const router = useRouter()
 const route = useRoute()
@@ -89,19 +90,27 @@ const mobileOpen = ref(false)
 const editingId = ref('')
 const editingTitle = ref('')
 const renaming = ref(false)
+const draftCount = ref(0)
 
 const currentRoute = computed(() => route.path)
 const activeConvId = computed(() => route.query.conv || null)
 
-onMounted(() => fetchConversations())
+onMounted(() => { fetchConversations(); loadDraftCount() })
 
 watch(activeConvId, () => fetchConversations())
-watch(() => route.fullPath, () => { mobileOpen.value = false })
+watch(() => route.fullPath, () => { mobileOpen.value = false; loadDraftCount() })
 
 async function fetchConversations() {
   try {
     const res = await getConversations()
     conversations.value = res.data
+  } catch { /* ignore */ }
+}
+
+async function loadDraftCount() {
+  try {
+    const res = await getSavedCaseDrafts()
+    draftCount.value = (res.data || []).length
   } catch { /* ignore */ }
 }
 
@@ -299,6 +308,22 @@ function onLogout() {
 }
 
 .logout-btn:hover { color: #fff; }
+
+.nav-label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.nav-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff4d4f;
+  margin-left: 6px;
+  flex-shrink: 0;
+}
 
 @media (max-width: 760px) {
   .sidebar-shell { width: 0; min-width: 0; }
