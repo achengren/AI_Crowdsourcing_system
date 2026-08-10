@@ -36,10 +36,8 @@
       <div class="card-grid">
         <!-- + 上传卡片 -->
         <div class="upload-card" :class="{ 'has-draft': draftCount > 0 }" @click="openManualSubmit">
-          <a-badge :count="draftCount" :overflow-count="99" v-if="draftCount > 0">
-            <PlusOutlined class="upload-icon" />
-          </a-badge>
-          <PlusOutlined v-else class="upload-icon" />
+          <span v-if="draftCount > 0" class="draft-dot">{{ draftCount > 99 ? '99+' : draftCount }}</span>
+          <PlusOutlined class="upload-icon" />
           <span v-if="draftCount > 0">{{ draftCount }} 份草稿待提交</span>
           <span v-else>提交案例</span>
         </div>
@@ -853,6 +851,7 @@ function displayPlatform(item) {
 
 /* 上传卡片 */
 .upload-card {
+  position: relative;
   height: 100%;
   min-height: 200px;
   border: 2px dashed var(--hib-line);
@@ -877,14 +876,27 @@ function displayPlatform(item) {
   font-size: 36px;
 }
 
+.draft-dot {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  font-size: 12px;
+  line-height: 20px;
+  text-align: center;
+  color: #fff;
+  background: #ff4d4f;
+  border-radius: 10px;
+  box-shadow: 0 0 0 2px #fff;
+  z-index: 1;
+}
+
 .upload-card.has-draft {
   border-color: var(--hib-red);
   border-style: solid;
   background: rgba(173, 70, 82, 0.03);
-}
-
-.upload-card.has-draft :deep(.ant-badge-count) {
-  box-shadow: 0 0 0 2px #fff;
 }
 
 /* 案例卡片 */
