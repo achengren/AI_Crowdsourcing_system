@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { ALLOWED_MIME_TYPES, STORAGE_CONFIG, UPLOADS_DIR } from '../config.js'
 import { genId } from '../db.js'
 
@@ -76,4 +76,22 @@ export async function deleteStoredObject(url) {
   const key = decodeURIComponent(url.slice(prefix.length))
   if (!key.startsWith(`${STORAGE_CONFIG.s3.keyPrefix}/`)) return
   await s3Client.send(new DeleteObjectCommand({ Bucket: STORAGE_CONFIG.s3.bucket, Key: key }))
+}
+
+export async function download(url) {
+  if (!url) throw new Error('无效的文件 URL')
+  if (STORAGE_CONFIG.driver === 'local') {
+    if (!url.startsWith('/uploads/')) throw new Error('无效的本地文件 URL')
+    const filename = path.basename(new URL(url, 'http://local').pathname)
+    return await fs.readFile(path.join(UPLOADS_DIR, filename))
+  }
+  const prefix = `${STORAGE_CONFIG.s3.publicBaseUrl}/`
+  if (!url.startsWith(prefix)) throw new Error('无效的 S3 文件 URL')
+  const key = decodeURIComponent(url.slice(prefix.length))
+  const response = await s3Client.send(new GetObjectCommand({ Bucket: STORAGE_CONFIG.s3.bucket, Key: key }))
+  const chunks = []
+  for await (const chunk of response.Body) {
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
 }

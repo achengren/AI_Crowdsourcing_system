@@ -11,18 +11,15 @@ export function parseImageContent(raw) {
 }
 
 export async function readImageAsBase64(imageUrl) {
-  if (STORAGE_CONFIG.driver !== 'local') {
+  let buffer
+  if (STORAGE_CONFIG.driver === 'local') {
+    buffer = await fs.readFile(path.join(UPLOADS_DIR, path.basename(imageUrl)))
+  } else {
     const { default: storage } = await import('../services/storage.js')
-    const buffer = await storage.download(imageUrl)
-    const base64 = buffer.toString('base64')
-    const ext = path.extname(imageUrl).slice(1).toLowerCase()
-    const mime = ext === 'jpg' ? 'jpeg' : ext
-    return `data:image/${mime};base64,${base64}`
+    buffer = await storage.download(imageUrl)
   }
-  const filePath = path.join(UPLOADS_DIR, path.basename(imageUrl))
-  const buffer = await fs.readFile(filePath)
   const base64 = buffer.toString('base64')
-  const ext = path.extname(filePath).slice(1).toLowerCase()
+  const ext = path.extname(imageUrl).slice(1).toLowerCase()
   const mime = ext === 'jpg' ? 'jpeg' : ext
   return `data:image/${mime};base64,${base64}`
 }
