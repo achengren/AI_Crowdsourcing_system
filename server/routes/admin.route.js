@@ -31,7 +31,7 @@ router.get('/overview', async (_req, res) => {
   const [users, cases, diaries, messages, ratings] = await Promise.all([
     one("SELECT COUNT(1) AS total, SUM(status = 'active') AS active FROM users WHERE role = 'student'"),
     one("SELECT COUNT(1) AS total, SUM(status = 'published') AS published, SUM(status = 'withdrawn') AS withdrawn, SUM(status = 'submitted') AS legacyPending FROM submissions"),
-    one("SELECT COUNT(1) AS total, SUM(log_date = CURRENT_DATE() AND status = 'submitted') AS today FROM information_need_logs"),
+    one("SELECT COUNT(1) AS total, SUM(CASE WHEN log_date = CURRENT_DATE() AND status = 'submitted' THEN 1 ELSE 0 END) AS today FROM information_need_logs"),
     one('SELECT COUNT(1) AS total FROM messages'),
     one(`SELECT COUNT(1) AS total, ROUND(AVG(score), 2) AS average,
                 COUNT(1) / NULLIF((SELECT COUNT(1) FROM messages WHERE role = 'assistant'), 0) AS responseRate
@@ -377,8 +377,9 @@ router.get('/diaries/:id', async (req, res) => {
     `SELECT d.id, DATE_FORMAT(d.log_date, '%Y-%m-%d') AS logDate,
             TIME_FORMAT(d.occurred_at, '%H:%i') AS occurredAt, d.context_text AS contextText,
             d.need_description AS needDescription, d.channels, d.search_process AS searchProcess,
-            d.outcome, d.reflection, d.is_genai_related AS isGenaiRelated,
-            d.genai_platform AS genaiPlatform, d.status, d.linked_conversation_id AS linkedConversationId,
+             d.outcome, d.reflection, d.is_genai_related AS isGenaiRelated,
+             d.genai_platform AS genaiPlatform, d.status, d.linked_conversation_id AS linkedConversationId,
+             d.source_message_id AS sourceMessageId, d.source_submission_id AS sourceSubmissionId,
             d.created_at AS createdAt, d.updated_at AS updatedAt,
             u.student_id AS studentId, u.name, u.class_name AS className
      FROM information_need_logs d JOIN users u ON u.id = d.user_id WHERE d.id = ?`,
@@ -409,7 +410,7 @@ router.get('/export', async (req, res) => {
               JOIN messages m ON m.id = r.message_id
               JOIN conversations c ON c.id = m.conversation_id
               ORDER BY r.updated_at DESC`,
-    cases: `SELECT u.student_id AS 账号, u.name AS 姓名, s.id AS 案例ID, s.prompt AS 信息需求,
+    cases: `SELECT u.student_id AS 账号, u.name AS 姓名, s.id AS 案例ID, s.prompt AS AI提问,
                    s.ai_answer AS AI回答, s.platform AS 平台, s.platform_other AS 其他平台名称,
                    s.model AS 模型, s.error_types AS 错误类型, s.error_type_other AS 其他错误类型,
                    s.knowledge_scenarios AS 知识场景, s.knowledge_scenario_other AS 其他知识场景,
@@ -431,8 +432,9 @@ router.get('/export', async (req, res) => {
                   ORDER BY a.created_at DESC`,
     diaries: `SELECT u.student_id AS 账号, u.name AS 姓名, d.log_date AS 日期, d.occurred_at AS 时间,
                      d.context_text AS 情境, d.need_description AS 信息需求, d.channels AS 渠道,
-                     d.search_process AS 搜寻过程, d.outcome AS 结果, d.reflection AS 反思,
-                     d.is_genai_related AS 是否GenAI, d.genai_platform AS GenAI平台, d.status AS 状态
+                      d.search_process AS 搜寻过程, d.outcome AS 结果, d.reflection AS 反思,
+                      d.is_genai_related AS 是否GenAI, d.genai_platform AS GenAI平台,
+                      d.source_message_id AS 来源回复ID, d.source_submission_id AS 来源案例ID, d.status AS 状态
               FROM information_need_logs d JOIN users u ON u.id = d.user_id ORDER BY d.log_date DESC`,
   }
   const rows = await query(queries[type])

@@ -26,11 +26,17 @@
             <a-select-option v-for="item in SOURCE_ISSUE_OPTIONS.filter(option => option.value !== 'none')" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
           </a-select>
         </div>
-        <a-radio-group v-model:value="sortBy" @change="onSort" size="small">
-          <a-radio-button value="latest">最新</a-radio-button>
-          <a-radio-button value="hot">最热</a-radio-button>
-          <a-radio-button value="controversial">争议最多</a-radio-button>
-        </a-radio-group>
+        <div class="toolbar-modes">
+          <a-radio-group v-model:value="scope" @change="onScope" size="small">
+            <a-radio-button value="all">全部案例</a-radio-button>
+            <a-radio-button value="mine">我的案例</a-radio-button>
+          </a-radio-group>
+          <a-radio-group v-model:value="sortBy" @change="onSort" size="small">
+            <a-radio-button value="latest">最新</a-radio-button>
+            <a-radio-button value="hot">最热</a-radio-button>
+            <a-radio-button value="controversial">争议最多</a-radio-button>
+          </a-radio-group>
+        </div>
       </div>
 
       <div class="card-grid">
@@ -125,7 +131,7 @@
     <!-- 提交案例弹窗 -->
     <a-modal
       v-model:open="showSubmitModal"
-      title="提交 AI 未满足信息需求案例"
+      title="提交问题案例"
       width="min(1080px, 94vw)"
       :footer="null"
       :destroy-on-close="true"
@@ -174,7 +180,7 @@
         </a-form-item>
 
         <a-form-item label="Prompt（必填）" name="prompt" :rules="[{ required: true, message: '请输入你的 Prompt' }]">
-          <a-textarea v-model:value="form.prompt" :readonly="Boolean(form.sourceMessageId)" :rows="3" placeholder="描述你的信息需求和给 AI 的提示词..." />
+          <a-textarea v-model:value="form.prompt" :readonly="Boolean(form.sourceMessageId)" :rows="3" placeholder="填写当时向 AI 输入的问题或提示词..." />
         </a-form-item>
 
         <a-row :gutter="16">
@@ -364,7 +370,7 @@
 </template>
 
 <script setup>
-import { reactive, ref, onMounted, onActivated, watch, nextTick } from 'vue'
+import { reactive, ref, onActivated, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { CheckOutlined, CloseOutlined, CommentOutlined, CopyOutlined, DeleteOutlined, DownOutlined, FileTextOutlined, HighlightOutlined, InboxOutlined, PictureOutlined, PlusOutlined, ScanOutlined, UpOutlined } from '@ant-design/icons-vue'
@@ -400,6 +406,17 @@ onActivated(() => {
 watch(() => route.query.submit, (val) => {
   if (val === '1') openSubmitFromQuery()
 })
+watch(() => route.query.mine, value => {
+  const nextScope = value === '1' ? 'mine' : 'all'
+  if (scope.value === nextScope) return
+  scope.value = nextScope
+  page.value = 1
+  loadCases()
+})
+watch(() => route.query.caseId, () => {
+  openedCaseId = ''
+  openCaseFromQuery()
+})
 
 // 列表
 const search = ref('')
@@ -407,14 +424,14 @@ const filterErrorType = ref(undefined)
 const filterScenario = ref(undefined)
 const filterSourceIssue = ref(undefined)
 const sortBy = ref('latest')
+const scope = ref(route.query.mine === '1' ? 'mine' : 'all')
 const loading = ref(false)
 const cases = ref([])
 const page = ref(1)
 const pageSize = ref(12)
 const total = ref(0)
 let loadCasesSeq = 0
-
-onMounted(() => { loadCases(); loadDraftCount(); openSubmitFromQuery() })
+let openedCaseId = ''
 
 async function loadCases() {
   const seq = ++loadCasesSeq
@@ -428,10 +445,12 @@ async function loadCases() {
       sourceIssue: filterSourceIssue.value,
       keyword: search.value,
       sortBy: sortBy.value,
+      mine: scope.value === 'mine' ? '1' : undefined,
     })
     if (seq !== loadCasesSeq) return // 忽略过期响应，防止旧筛选结果覆盖最新结果
     cases.value = res.data.list || []
     total.value = res.data.total || 0
+    await openCaseFromQuery()
   } catch { /* ignore */ } finally {
     if (seq === loadCasesSeq) loading.value = false
   }
@@ -440,6 +459,30 @@ async function loadCases() {
 function onSearch() { page.value = 1; loadCases() }
 function onFilter() { page.value = 1; loadCases() }
 function onSort() { page.value = 1; loadCases() }
+async function onScope() {
+  page.value = 1
+  const query = { ...route.query }
+  if (scope.value === 'mine') query.mine = '1'
+  else delete query.mine
+  await router.replace({ path: '/gallery', query })
+  loadCases()
+}
+
+async function openCaseFromQuery() {
+  const caseId = String(route.query.caseId || '')
+  if (!caseId || caseId === openedCaseId) return
+  let item = cases.value.find(entry => entry.id === caseId)
+  if (!item) {
+    try {
+      const response = await getCases({ caseId, page: 1, pageSize: 1 })
+      item = response.data.list?.[0]
+    } catch { /* list error is already handled by the page */ }
+  }
+  if (item) {
+    openedCaseId = caseId
+    await openDetail(item)
+  }
+}
 
 // 提交
 const showSubmitModal = ref(false)
@@ -799,6 +842,7 @@ function displayPlatform(item) {
   height: 100vh;
   background: var(--hib-paper);
 }
+.toolbar-modes { display: flex; align-items: center; gap: 10px; }
 
 /* 主区 */
 .main {

@@ -148,7 +148,7 @@
           <a-descriptions-item label="来源问题">{{ taxonomyText(selectedCase.sourceIssues, '', SOURCE_ISSUE_OPTIONS, selectedCase.sourceIssueOther) }}</a-descriptions-item>
           <a-descriptions-item label="知识场景" :span="2">{{ taxonomyText(selectedCase.knowledgeScenarios, '', KNOWLEDGE_SCENARIO_OPTIONS, selectedCase.knowledgeScenarioOther) }}</a-descriptions-item>
         </a-descriptions>
-        <section class="detail-block"><h3>信息需求</h3><p>{{ selectedCase.prompt }}</p></section>
+        <section class="detail-block"><h3>AI 提问（Prompt）</h3><p>{{ selectedCase.prompt }}</p></section>
         <section v-if="selectedCase.images?.length" class="detail-block">
           <h3>用户上传的原图</h3>
           <a-image-preview-group>

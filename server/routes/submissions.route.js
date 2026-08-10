@@ -200,12 +200,51 @@ router.get('/draft/from-message/:messageId', authMiddleware, async (req, res) =>
 router.get('/draft/from-diary/:diaryId', authMiddleware, async (req, res) => {
   const diary = await one(
     `SELECT id, need_description AS prompt, outcome AS aiAnswer, genai_platform AS platform,
-            is_genai_related AS isGenaiRelated
+            is_genai_related AS isGenaiRelated, source_message_id AS sourceMessageId
      FROM information_need_logs WHERE id = ? AND user_id = ?`,
     [req.params.diaryId, req.user.id]
   )
   if (!diary) return res.status(404).json({ message: '信息需求记录不存在' })
   if (!toBoolean(diary.isGenaiRelated)) return res.status(400).json({ message: '只有与 GenAI 有关的记录才能转为案例' })
+  if (diary.sourceMessageId) {
+    const assistant = await one(
+      `SELECT m.id, m.content AS aiAnswer, m.provider AS platform, m.model, m.created_at AS createdAt,
+              c.id AS conversationId
+       FROM messages m JOIN conversations c ON c.id = m.conversation_id
+       WHERE m.id = ? AND m.role = 'assistant' AND c.user_id = ?`,
+      [diary.sourceMessageId, req.user.id]
+    )
+    if (assistant) {
+      const userMessage = await one(
+        `SELECT content FROM messages WHERE conversation_id = ? AND role = 'user' AND created_at <= ?
+         ORDER BY created_at DESC LIMIT 1`,
+        [assistant.conversationId, assistant.createdAt]
+      )
+      const sourceUserMessage = extractUserMessage(userMessage?.content)
+      const contextRows = await query(
+        `SELECT id, role, content, created_at AS createdAt FROM messages
+         WHERE conversation_id = ? AND created_at <= ? ORDER BY created_at ASC, FIELD(role, 'user', 'assistant')`,
+        [assistant.conversationId, assistant.createdAt]
+      )
+      return res.json({
+        code: 0,
+        data: {
+          sourceDiaryId: diary.id,
+          sourceMessageId: assistant.id,
+          prompt: sourceUserMessage.prompt,
+          aiAnswer: assistant.aiAnswer,
+          platform: assistant.platform,
+          model: assistant.model,
+          images: sourceUserMessage.imageUrl ? [sourceUserMessage.imageUrl] : [],
+          contextMessages: contextRows.map(item => {
+            const parsedContent = item.role === 'user' ? extractUserMessage(item.content) : { prompt: item.content, imageUrl: '' }
+            return { id: item.id, role: item.role, content: parsedContent.prompt, imageUrl: parsedContent.imageUrl, createdAt: item.createdAt }
+          }),
+          platformLocked: true,
+        },
+      })
+    }
+  }
   res.json({ code: 0, data: { ...diary, sourceDiaryId: diary.id, platformLocked: Boolean(diary.platform) } })
 })
 
@@ -312,6 +351,24 @@ router.post('/', authMiddleware, async (req, res) => {
   const id = genId()
   try {
     await transaction(async connection => {
+      if (data.sourceDiaryId) {
+        const [diaryRows] = await connection.execute(
+          `SELECT source_submission_id AS sourceSubmissionId
+           FROM information_need_logs WHERE id = ? AND user_id = ? FOR UPDATE`,
+          [data.sourceDiaryId, req.user.id]
+        )
+        const [linkedRows] = await connection.execute(
+          `SELECT id FROM submissions
+           WHERE source_diary_id = ? AND user_id = ? AND status IN ('submitted', 'published', 'withdrawn')
+           LIMIT 1`,
+          [data.sourceDiaryId, req.user.id]
+        )
+        if (diaryRows[0]?.sourceSubmissionId || linkedRows.length) {
+          const error = new Error('该信息需求记录已关联案例')
+          error.code = 'DIARY_ALREADY_LINKED'
+          throw error
+        }
+      }
       await connection.execute(
         `INSERT INTO submissions
          (id, user_id, prompt, platform, platform_other, model, ai_answer, category,
@@ -344,6 +401,9 @@ router.post('/', authMiddleware, async (req, res) => {
       }
     })
   } catch (error) {
+    if (error.code === 'DIARY_ALREADY_LINKED') {
+      return res.status(409).json({ message: '该信息需求记录已关联案例，请勿重复提交' })
+    }
     if (revisionSource && error.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ message: '该案例已有后续版本，请刷新后查看' })
     }

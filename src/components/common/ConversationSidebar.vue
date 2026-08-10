@@ -52,6 +52,13 @@
         <span v-if="draftCount > 0" class="nav-dot"></span>
       </div>
       <div
+        :class="['sidebar-nav-item', { active: currentRoute.startsWith('/diaries') }]"
+        @click="navigate('/diaries')"
+      >
+        <ReadOutlined />
+        <span>信息需求</span>
+      </div>
+      <div
         :class="['sidebar-nav-item', { active: currentRoute === '/profile' }]"
         @click="navigate('/profile')"
       >
@@ -77,7 +84,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { CloseOutlined, EditOutlined, FolderOutlined, MenuOutlined, PlusOutlined, SettingOutlined, UserOutlined } from '@ant-design/icons-vue'
+import { CloseOutlined, EditOutlined, FolderOutlined, MenuOutlined, PlusOutlined, ReadOutlined, SettingOutlined, UserOutlined } from '@ant-design/icons-vue'
 import { useAuthStore } from '../../store/auth'
 import { getConversations, updateConversationTitle } from '../../api/chat'
 import { getSavedCaseDrafts } from '../../api/submission'

@@ -8,8 +8,10 @@ const TABLES = [
   'users',
   'conversations',
   'messages',
+  'message_ratings',
   'information_need_logs',
   'submissions',
+  'case_drafts',
   'case_annotations',
   'likes',
   'comments',
@@ -17,6 +19,7 @@ const TABLES = [
   'annotation_comments',
   'audit_logs',
   'ai_vision_cache',
+  'uploaded_files',
 ]
 
 const outputPath = path.resolve(process.argv[2] || '.deployment/ai-crowdsourcing-data.sql')

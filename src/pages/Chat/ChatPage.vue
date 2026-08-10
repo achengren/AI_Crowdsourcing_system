@@ -33,9 +33,6 @@
                 <a-tag color="warning" class="quality-tag">
                   <ExclamationCircleOutlined /> 可能存在信息缺失
                 </a-tag>
-                <a-button size="small" type="primary" ghost @click="onSubmitCase(msg, i)">
-                  <UploadOutlined /> 标注并提交
-                </a-button>
                 <a-popover title="改进建议" trigger="click" placement="bottomLeft">
                   <template #content>
                     <div v-if="msg.solutionLoading" style="padding: 12px; text-align: center;">
@@ -49,9 +46,13 @@
                   </a-button>
                 </a-popover>
               </template>
-              <template v-else>
-                <a-button size="small" type="link" @click="onSubmitCase(msg, i)">标注并提交</a-button>
-              </template>
+              <span class="action-divider"></span>
+              <a-button size="small" type="link" class="case-action" @click="onSubmitCase(msg, i)">
+                <HighlightOutlined />提交为案例
+              </a-button>
+              <a-button size="small" type="link" class="diary-action" @click="onSubmitDiary(msg)">
+                <ReadOutlined />记录为信息需求
+              </a-button>
             </div>
           </div>
         </div>
@@ -121,7 +122,7 @@
 import { ref, nextTick, onMounted, onUnmounted, onActivated, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { SendOutlined, PictureOutlined, CloseOutlined, ExclamationCircleOutlined, UploadOutlined, BulbOutlined, QuestionCircleOutlined } from '@ant-design/icons-vue'
+import { SendOutlined, PictureOutlined, CloseOutlined, ExclamationCircleOutlined, BulbOutlined, QuestionCircleOutlined, HighlightOutlined, ReadOutlined } from '@ant-design/icons-vue'
 import ConversationSidebar from '../../components/common/ConversationSidebar.vue'
 import { sendMessage, getConversations, getMessages, getSolutionSuggestion, rateMessage } from '../../api/chat'
 import { uploadImage } from '../../api/submission'
@@ -343,6 +344,10 @@ function onSubmitCase(aiMsg, aiIndex) {
   router.push({ path: '/cases/new', query })
 }
 
+function onSubmitDiary(aiMsg) {
+  router.push({ path: '/diaries/new', query: { messageId: aiMsg.id } })
+}
+
 async function onGetSuggestion(aiMsg, aiIndex) {
   let userContent = ''
   for (let i = aiIndex - 1; i >= 0; i--) {
@@ -453,6 +458,7 @@ async function scrollToBottom() {
 .message-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 6px;
 }
@@ -487,6 +493,9 @@ async function scrollToBottom() {
 }
 .rating-label { margin-left: 2px; color: var(--hib-muted); font-size: 12px; }
 .rating-help { color: #9aa09c; cursor: help; }
+.action-divider { width: 1px; height: 16px; margin-inline: 2px; background: var(--hib-line); }
+.case-action { color: var(--hib-red); }
+.diary-action { color: #376d5a; }
 
 .chat-input-inner :deep(.ant-input) {
   border: none !important;

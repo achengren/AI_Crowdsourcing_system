@@ -60,11 +60,20 @@ async function getPublishedAnnotation(caseId, annotationId) {
 }
 
 router.get('/', async (req, res) => {
-  const { category, errorType, knowledgeScenario, sourceIssue, keyword, sortBy = 'latest' } = req.query
+  const { category, errorType, knowledgeScenario, sourceIssue, keyword, sortBy = 'latest', caseId, mine } = req.query
   const page = Math.max(1, Number(req.query.page) || 1)
   const pageSize = Math.min(50, Math.max(1, Number(req.query.pageSize) || 12))
   const where = ["s.status = 'published'"]
   const params = []
+
+  if (caseId) {
+    where.push('s.id = ?')
+    params.push(caseId)
+  }
+  if (mine === '1') {
+    where.push('s.user_id = ?')
+    params.push(req.user.id)
+  }
 
   const selectedErrorType = errorType || category
   if (selectedErrorType) {

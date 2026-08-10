@@ -5,8 +5,8 @@
       <header class="editor-header">
         <div>
           <a-button type="text" class="back-button" @click="router.push('/gallery')"><ArrowLeftOutlined />返回案例广场</a-button>
-          <h1>创建案例</h1>
-          <p>对 AI 回复中的具体问题进行分类和片段批注</p>
+          <h1>提交问题案例</h1>
+          <p>标出 AI 回复中的具体错误，并补充分类和片段批注</p>
         </div>
         <div class="save-state" :class="saveState">
           <LoadingOutlined v-if="saveState === 'saving'" />
@@ -36,7 +36,7 @@
             </div>
           </div>
           <div v-else class="source-preview">
-            <div><span>用户需求</span><p>{{ form.prompt || '填写后将在这里预览' }}</p></div>
+            <div><span>用户提问</span><p>{{ form.prompt || '填写后将在这里预览' }}</p></div>
             <div><span>AI 回复</span><p>{{ form.aiAnswer || '导入或填写 AI 回复后将在这里预览' }}</p></div>
           </div>
         </aside>
@@ -65,9 +65,9 @@
               </div>
             </div>
 
-            <div class="section-title"><span>案例内容</span><small>案例发布后立即对课程成员可见</small></div>
-            <a-form-item label="用户的信息需求" name="prompt" :rules="[{ required: true, message: '请填写用户的信息需求' }]">
-              <a-textarea v-model:value="form.prompt" :readonly="Boolean(form.sourceMessageId)" :rows="3" />
+            <div class="section-title"><span>案例内容</span><small>案例与每日信息需求作业分别保存</small></div>
+            <a-form-item label="向 AI 提出的问题（Prompt）" name="prompt" :rules="[{ required: true, message: '请填写向 AI 提出的问题' }]">
+              <a-textarea v-model:value="form.prompt" :readonly="Boolean(form.sourceMessageId)" :rows="3" placeholder="填写当时向 AI 输入的问题或提示词" />
             </a-form-item>
 
             <a-row :gutter="16">
@@ -168,7 +168,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
-import { message } from 'ant-design-vue'
+import { message, Modal } from 'ant-design-vue'
 import { ArrowLeftOutlined, CheckCircleOutlined, CopyOutlined, ExclamationCircleOutlined, FileTextOutlined, InboxOutlined, InfoCircleOutlined, LoadingOutlined, PlusOutlined, SaveOutlined, ScanOutlined, SendOutlined } from '@ant-design/icons-vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -284,6 +284,7 @@ async function loadInitialData() {
     } else if (route.query.diaryId) {
       const response = await getCaseDraftFromDiary(route.query.diaryId)
       applyFormData(response.data)
+      contextMessages.value = response.data.contextMessages || []
       platformLocked.value = Boolean(response.data.platformLocked)
     } else if (route.query.revisionId) {
       const response = await getCaseDraftFromRevision(route.query.revisionId)
@@ -389,11 +390,22 @@ async function publishCase() {
   if (!form.annotations.length && !form.note.trim()) return message.warning('请至少添加一条片段批注或填写整体问题说明')
   publishing.value = true
   try {
-    await submitCase({ ...serializedForm(), draftId: draftId.value || null })
+    const response = await submitCase({ ...serializedForm(), draftId: draftId.value || null })
     dirty.value = false
     if (draftId.value) await deleteCaseDraft(draftId.value).catch(() => {})
     message.success('案例已发布')
-    await router.push('/gallery')
+    if (form.sourceDiaryId) {
+      await router.push('/gallery')
+    } else {
+      Modal.confirm({
+        title: '是否同时提交为信息需求作业？',
+        content: '案例已经单独发布。选择同时提交后会打开信息需求作业页，并带入这次提问和 AI 回复；作业仍需补充搜寻过程与反思后单独提交。',
+        okText: '同时提交为作业',
+        cancelText: '暂不填写',
+        onOk: () => router.push({ path: '/diaries/new', query: { caseId: response.data.id } }),
+        onCancel: () => router.push('/gallery'),
+      })
+    }
   } catch (error) {
     message.error(error.response?.data?.message || '发布失败，请重试')
   } finally {
@@ -499,17 +511,21 @@ function onPreview(file) { previewSrc.value = file.url || file.thumbUrl }
 .save-state.error { color: #a6404c; }
 .loading-state { min-height: 420px; display: grid; place-items: center; color: var(--hib-muted); }
 .editor-workspace { display: grid; grid-template-columns: minmax(340px, .82fr) minmax(620px, 1.45fr); max-width: 1500px; min-height: calc(100vh - 112px); margin: 0 auto; }
-.source-panel { min-width: 0; padding: 26px 24px 48px 30px; border-right: 1px solid var(--hib-line); background: rgba(255,255,255,.38); }
-.panel-heading { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; padding-bottom: 12px; border-bottom: 1px solid var(--hib-line); background: var(--hib-paper); font-weight: 650; }
+.source-panel { position: sticky; top: 0; align-self: start; box-sizing: border-box; display: flex; flex-direction: column; min-width: 0; height: clamp(520px, calc(100vh - 112px), 760px); padding: 26px 16px 24px 30px; border-right: 1px solid var(--hib-line); background: rgba(255,255,255,.38); overflow: hidden; }
+.panel-heading { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; margin: 0 8px 18px 0; padding-bottom: 12px; border-bottom: 1px solid var(--hib-line); font-weight: 650; }
 .source-context-note { display: flex; align-items: flex-start; gap: 8px; margin: -4px 0 18px; padding: 10px 12px; border-left: 2px solid var(--hib-red); background: var(--hib-red-soft); color: var(--hib-muted); font-size: 12px; line-height: 1.65; }
 .source-context-note :deep(.anticon) { flex: 0 0 auto; margin-top: 3px; color: var(--hib-red); }
-.context-list { display: grid; gap: 14px; }
+.context-list, .source-preview { flex: 1 1 auto; min-height: 0; padding-right: 8px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.context-list { display: grid; align-content: start; gap: 14px; }
+.context-list::-webkit-scrollbar, .source-preview::-webkit-scrollbar { width: 8px; }
+.context-list::-webkit-scrollbar-thumb, .source-preview::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 8px; background: #cdbfbc; background-clip: padding-box; }
+.context-list::-webkit-scrollbar-track, .source-preview::-webkit-scrollbar-track { background: transparent; }
 .context-message { padding: 14px 18px 14px 22px; border-left: 3px solid #9da5a0; background: rgba(255,255,255,.66); }
 .context-message.assistant { border-left-color: var(--hib-red); }
 .context-message > span, .source-preview span { display: block; color: var(--hib-muted); font-size: 11px; font-weight: 650; text-transform: uppercase; }
 .context-message p, .source-preview p { margin: 7px 0 0; white-space: pre-wrap; line-height: 1.65; }
 .context-message img { width: min(240px, 100%); max-height: 180px; margin-top: 8px; object-fit: cover; cursor: zoom-in; }
-.source-preview { display: grid; gap: 20px; }
+.source-preview { display: grid; align-content: start; gap: 20px; }
 .source-preview > div { padding-bottom: 18px; border-bottom: 1px solid var(--hib-line); }
 .form-panel { min-width: 0; padding: 28px 34px 64px; background: #fff; }
 .section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin: 4px 0 18px; padding-bottom: 10px; border-bottom: 2px solid var(--hib-red-soft); }
@@ -523,5 +539,5 @@ function onPreview(file) { previewSrc.value = file.url || file.thumbUrl }
 .form-actions { position: sticky; bottom: 0; z-index: 4; display: flex; justify-content: flex-end; gap: 10px; margin: 22px -34px -64px; padding: 15px 34px; border-top: 1px solid var(--hib-line); background: rgba(255,255,255,.96); }
 .preview-image { display: block; max-width: 82vw; max-height: 82vh; }
 @media (max-width: 1050px) { .editor-workspace { grid-template-columns: minmax(290px, .7fr) minmax(500px, 1.3fr); } .taxonomy-grid { grid-template-columns: 1fr; gap: 0; } }
-@media (max-width: 760px) { .editor-header { padding: 70px 16px 16px; align-items: flex-start; flex-direction: column; gap: 10px; } .editor-workspace { display: block; } .source-panel { padding: 20px 16px; border-right: 0; border-bottom: 1px solid var(--hib-line); } .form-panel { padding: 24px 16px 80px; } .form-actions { margin: 20px -16px -80px; padding: 12px 16px; } }
+@media (max-width: 760px) { .editor-header { padding: 70px 16px 16px; align-items: flex-start; flex-direction: column; gap: 10px; } .editor-workspace { display: block; } .source-panel { position: static; width: 100%; height: min(560px, 62vh); min-height: 360px; padding: 20px 12px 18px 16px; border-right: 0; border-bottom: 1px solid var(--hib-line); } .form-panel { padding: 24px 16px 80px; } .form-actions { margin: 20px -16px -80px; padding: 12px 16px; } }
 </style>
