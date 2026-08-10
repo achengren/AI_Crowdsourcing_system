@@ -320,7 +320,7 @@ function onLogout() {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #ff4d4f;
+  background: #fff;
   margin-left: 6px;
   flex-shrink: 0;
 }
