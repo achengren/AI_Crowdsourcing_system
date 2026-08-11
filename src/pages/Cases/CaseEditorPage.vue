@@ -144,15 +144,7 @@
             <a-alert type="warning" show-icon message="发布前请确认不含姓名、联系方式等敏感信息" description="案例发布后立即对课程成员可见，发布内容只能由管理员撤回。" />
             <div class="form-actions">
               <a-button :loading="saving" @click="saveDraft(false)"><SaveOutlined />保存草稿</a-button>
-              <a-popconfirm
-                title="确认发布这个案例？"
-                description="发布后立即对课程成员可见，案例和批注不能由学生自行修改或删除。"
-                ok-text="确认发布"
-                cancel-text="继续编辑"
-                @confirm="publishCase"
-              >
-                <a-button type="primary" :loading="publishing" :disabled="saving"><SendOutlined />发布案例</a-button>
-              </a-popconfirm>
+              <a-button type="primary" :loading="publishing" :disabled="saving" @click="requestPublish"><SendOutlined />发布案例</a-button>
             </div>
           </a-form>
         </section>
@@ -198,6 +190,7 @@ const publishing = ref(false)
 const loaded = ref(false)
 const dirty = ref(false)
 const saveState = ref('idle')
+const saveMode = ref('auto')
 const draftId = ref('')
 const platformLocked = ref(false)
 const contextMessages = ref([])
@@ -213,7 +206,12 @@ const emptyForm = () => ({
 })
 const formKeys = Object.keys(emptyForm())
 const form = reactive(emptyForm())
-const saveStateText = computed(() => ({ idle: '尚未保存', saving: '正在保存', saved: '草稿已保存', error: '保存失败' })[saveState.value])
+const saveStateText = computed(() => {
+  if (saveState.value === 'idle') return '自动保存已开启'
+  if (saveState.value === 'saving') return saveMode.value === 'auto' ? '正在自动保存' : '正在保存'
+  if (saveState.value === 'saved') return saveMode.value === 'auto' ? '已自动保存为草稿' : '草稿已保存'
+  return '保存失败'
+})
 
 const importMode = ref('link')
 const importOptions = [
@@ -308,6 +306,7 @@ function resetEditorState() {
   loading.value = true
   dirty.value = false
   saveState.value = 'idle'
+  saveMode.value = 'auto'
   draftId.value = ''
   platformLocked.value = false
   contextMessages.value = []
@@ -352,6 +351,7 @@ function hasDraftContent() {
 
 async function saveDraft(quiet = false) {
   if (!hasDraftContent() || publishing.value || saving.value) return
+  saveMode.value = quiet ? 'auto' : 'manual'
   saving.value = true
   saveState.value = 'saving'
   try {
@@ -381,13 +381,33 @@ async function saveDraft(quiet = false) {
   }
 }
 
-async function publishCase() {
+async function validatePublishForm() {
   try {
     await formRef.value.validate()
   } catch {
-    return message.warning('请补充所有必填信息')
+    message.warning('请补充所有必填信息')
+    return false
   }
-  if (!form.annotations.length && !form.note.trim()) return message.warning('请至少添加一条片段批注或填写整体问题说明')
+  if (!form.annotations.length && !form.note.trim()) {
+    message.warning('请至少添加一条片段批注或填写整体问题说明')
+    return false
+  }
+  return true
+}
+
+async function requestPublish() {
+  if (!(await validatePublishForm())) return
+  Modal.confirm({
+    title: '确认发布这个案例？',
+    content: '发布后立即对课程成员可见，案例和批注不能由学生自行修改或删除。',
+    okText: '确认发布',
+    cancelText: '继续编辑',
+    onOk: publishCase,
+  })
+}
+
+async function publishCase() {
+  if (publishing.value) return
   publishing.value = true
   try {
     const response = await submitCase({ ...serializedForm(), draftId: draftId.value || null })

@@ -48,6 +48,7 @@
             <template v-if="column.key === 'identity'"><strong>{{ record.name }}</strong><div class="subtext">{{ record.studentId }}</div></template>
             <template v-else-if="column.key === 'role'"><a-tag :color="record.role === 'admin' ? 'green' : 'blue'">{{ record.role === 'admin' ? '管理员' : '学生' }}</a-tag></template>
             <template v-else-if="column.key === 'status'"><a-badge :status="record.status === 'active' ? 'success' : 'default'" :text="record.status === 'active' ? '启用' : '停用'" /></template>
+            <template v-else-if="column.dataIndex === 'lastLoginAt'">{{ formatDateTime(record.lastLoginAt, '从未登录') }}</template>
             <template v-else-if="column.key === 'actions'"><a-space><a-button type="link" size="small" @click="openUser(record)">编辑</a-button><a-button type="link" size="small" @click="openReset(record)">重置密码</a-button><a-popconfirm title="停用该账号？" @confirm="disableUser(record)"><a-button type="link" danger size="small">停用</a-button></a-popconfirm></a-space></template>
           </template>
         </a-table>
@@ -57,7 +58,7 @@
       <section v-else-if="activeView === 'conversations'">
         <div class="table-toolbar"><a-input-search v-model:value="filters.conversations" placeholder="搜索学生或会话" style="width:320px" @search="loadConversations" /></div>
         <a-table :columns="conversationColumns" :data-source="conversations" row-key="id" :pagination="false" :scroll="{ x: 900 }" size="middle">
-          <template #bodyCell="{ column, record }"><template v-if="column.key === 'user'"><strong>{{ record.name }}</strong><div class="subtext">{{ record.studentId }}</div></template><template v-else-if="column.key === 'actions'"><a-button type="link" @click="viewConversation(record)">查看对话</a-button></template></template>
+          <template #bodyCell="{ column, record }"><template v-if="column.key === 'user'"><strong>{{ record.name }}</strong><div class="subtext">{{ record.studentId }}</div></template><template v-else-if="column.dataIndex === 'updatedAt'">{{ formatDateTime(record.updatedAt) }}</template><template v-else-if="column.key === 'actions'"><a-button type="link" @click="viewConversation(record)">查看对话</a-button></template></template>
         </a-table>
         <a-pagination class="pager" v-model:current="pages.conversations" :total="totals.conversations" :page-size="20" @change="loadConversations" />
       </section>
@@ -95,7 +96,7 @@
         </a-table>
         <div class="table-toolbar"><a-input-search v-model:value="filters.diaries" placeholder="搜索学生或信息需求" style="width:340px" @search="loadDiaries" /></div>
         <a-table :columns="diaryColumns" :data-source="adminDiaries" row-key="id" :pagination="false" :scroll="{ x: 900 }" size="middle">
-          <template #bodyCell="{ column, record }"><template v-if="column.key === 'user'"><strong>{{ record.name }}</strong><div class="subtext">{{ record.studentId }}</div></template><template v-else-if="column.key === 'need'"><div class="truncate">{{ record.needDescription }}</div><div class="subtext">{{ record.channels }}</div></template><template v-else-if="column.key === 'genai'"><a-tag :color="record.isGenaiRelated ? 'blue' : 'default'">{{ record.isGenaiRelated ? record.genaiPlatform : '否' }}</a-tag></template><template v-else-if="column.key === 'actions'"><a-button type="link" size="small" @click="viewDiary(record)">查看详情</a-button></template></template>
+          <template #bodyCell="{ column, record }"><template v-if="column.key === 'user'"><strong>{{ record.name }}</strong><div class="subtext">{{ record.studentId }}</div></template><template v-else-if="column.key === 'need'"><div class="truncate">{{ record.needDescription }}</div><div class="subtext">{{ record.channels }}</div></template><template v-else-if="column.key === 'genai'"><a-tag :color="record.isGenaiRelated ? 'blue' : 'default'">{{ record.isGenaiRelated ? record.genaiPlatform : '否' }}</a-tag></template><template v-else-if="column.dataIndex === 'status'"><a-tag :color="record.status === 'submitted' ? 'green' : 'orange'">{{ diaryStatusLabel(record.status) }}</a-tag></template><template v-else-if="column.key === 'actions'"><a-button type="link" size="small" @click="viewDiary(record)">查看详情</a-button></template></template>
         </a-table>
         <a-pagination class="pager" v-model:current="pages.diaries" :total="totals.diaries" :page-size="20" @change="loadDiaries" />
       </section>
@@ -317,6 +318,12 @@ async function onAdminWithdrawAnnotation(annotation) { await withdrawCaseAnnotat
 async function runExport(type) { await exportAdminData(type); message.success('导出已开始下载') }
 function statusLabel(value) { return ({ draft: '草稿', submitted: '旧待审核记录', published: '已发布', rejected: '旧退回记录', withdrawn: '已撤回' })[value] || value }
 function statusColor(value) { return ({ draft: 'default', submitted: 'orange', published: 'green', rejected: 'red', withdrawn: 'default' })[value] }
+function diaryStatusLabel(value) { return ({ draft: '草稿', submitted: '已提交' })[value] || '未知状态' }
+function formatDateTime(value, fallback = '未记录') {
+  if (!value) return fallback
+  const parsed = dayjs(value)
+  return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : fallback
+}
 function displayPlatform(record) { return platformLabel(record.platform, record.platformOther) }
 function backToStudent() { router.push('/chat') }
 async function logout() { await auth.logout(); await router.push('/login') }

@@ -28,7 +28,26 @@
               <a-tooltip title="1 星表示非常不满意，5 星表示非常满意。评分只用于课程分析，不影响案例提交。">
                 <QuestionCircleOutlined class="rating-help" />
               </a-tooltip>
-              <a-rate v-model:value="msg.rating" :count="5" :allow-clear="false" :disabled="msg.ratingSaving" size="small" @change="onRate(msg, $event)" />
+              <div class="rating-control" role="radiogroup" :aria-label="`回答满意度：${msg.rating ? `${msg.rating} 星` : '尚未评分'}`">
+                <label
+                  v-for="score in RATING_SCORES"
+                  :key="score"
+                  class="rating-star"
+                  :class="{ active: score <= Number(msg.rating || 0), disabled: msg.ratingSaving }"
+                >
+                  <input
+                    class="rating-radio"
+                    type="radio"
+                    :name="`message-rating-${msg.id}`"
+                    :value="score"
+                    :checked="Number(msg.rating || 0) === score"
+                    :disabled="msg.ratingSaving"
+                    :aria-label="`${score} 星：${RATING_LABELS[score - 1]}`"
+                    @change="onRate(msg, score)"
+                  />
+                  <StarFilled aria-hidden="true" />
+                </label>
+              </div>
               <template v-if="msg.qualityFlag && msg.qualityFlag.isLowQuality">
                 <a-tag color="warning" class="quality-tag">
                   <ExclamationCircleOutlined /> 可能存在信息缺失
@@ -122,7 +141,7 @@
 import { ref, nextTick, onMounted, onUnmounted, onActivated, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { SendOutlined, PictureOutlined, CloseOutlined, ExclamationCircleOutlined, BulbOutlined, QuestionCircleOutlined, HighlightOutlined, ReadOutlined } from '@ant-design/icons-vue'
+import { SendOutlined, PictureOutlined, CloseOutlined, ExclamationCircleOutlined, BulbOutlined, QuestionCircleOutlined, HighlightOutlined, ReadOutlined, StarFilled } from '@ant-design/icons-vue'
 import ConversationSidebar from '../../components/common/ConversationSidebar.vue'
 import { sendMessage, getConversations, getMessages, getSolutionSuggestion, rateMessage } from '../../api/chat'
 import { uploadImage } from '../../api/submission'
@@ -145,6 +164,8 @@ const messageList = ref(null)
 const activeConvId = ref(null)
 const fileInput = ref(null)
 const isComposing = ref(false)
+const RATING_SCORES = [1, 2, 3, 4, 5]
+const RATING_LABELS = ['非常不满意', '不满意', '一般', '满意', '非常满意']
 let loadToken = 0
 let conversationGeneration = 0
 
@@ -493,6 +514,13 @@ async function scrollToBottom() {
 }
 .rating-label { margin-left: 2px; color: var(--hib-muted); font-size: 12px; }
 .rating-help { color: #9aa09c; cursor: help; }
+.rating-control { display: inline-flex; align-items: center; gap: 2px; min-width: 108px; height: 24px; }
+.rating-star { position: relative; width: 20px; height: 20px; display: grid; place-items: center; color: #d8d8d8; cursor: pointer; transition: color .16s ease, transform .16s ease; }
+.rating-star.active { color: #f5c518; }
+.rating-star:not(.disabled):hover { color: #e7b70f; transform: translateY(-1px); }
+.rating-star.disabled { cursor: wait; opacity: .66; }
+.rating-radio { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: inherit; }
+.rating-star:focus-within { outline: 2px solid rgba(173, 70, 82, .46); outline-offset: 2px; }
 .action-divider { width: 1px; height: 16px; margin-inline: 2px; background: var(--hib-line); }
 .case-action { color: var(--hib-red); }
 .diary-action { color: #376d5a; }

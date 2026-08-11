@@ -272,7 +272,7 @@
           <span v-if="detailCase.sourceIssues?.length" class="taxonomy-label">来源问题</span>
           <a-tag v-for="issue in detailCase.sourceIssues || []" :key="`source-${issue}`" color="orange">{{ taxonomyLabel(SOURCE_ISSUE_OPTIONS, issue, detailCase.sourceIssueOther) }}</a-tag>
           <a-tag>{{ displayPlatform(detailCase) }}</a-tag>
-          <span class="detail-meta">{{ detailCase.author }} · {{ detailCase.createdAt }}</span>
+          <span class="detail-meta">{{ detailCase.author }} · {{ formatDateTime(detailCase.createdAt) }}</span>
         </div>
         <div class="detail-section">
           <div class="detail-section-title">Prompt</div>
@@ -381,6 +381,7 @@ import { addCaseAnnotation, deleteCaseDraft, getCaseDraftFromDiary, getCaseDraft
 import { CASE_CATEGORIES, ERROR_TYPE_OPTIONS, KNOWLEDGE_SCENARIO_OPTIONS, PLATFORM_OPTIONS, SOURCE_ISSUE_OPTIONS, optionLabel, platformLabel } from '../../constants/options'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import dayjs from 'dayjs'
 
 const router = useRouter()
 const route = useRoute()
@@ -571,7 +572,13 @@ function displayDraftPlatform(draft) {
 }
 
 function formatDraftTime(value) {
-  return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '尚未保存时间'
+  return formatDateTime(value, '尚未保存时间')
+}
+
+function formatDateTime(value, fallback = '时间未记录') {
+  if (!value) return fallback
+  const parsed = dayjs(value)
+  return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : fallback
 }
 
 watch(showSubmitModal, (val) => {
