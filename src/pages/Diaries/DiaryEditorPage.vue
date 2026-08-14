@@ -42,16 +42,27 @@
             <div class="section-title"><span>发生时间与情境</span><small>第 1 部分</small></div>
             <a-row :gutter="16">
               <a-col :xs="24" :md="12">
-                <a-form-item label="日期" required>
-                  <a-date-picker v-model:value="diaryDate" :allow-clear="false" :disabled="Boolean(editingId)" style="width:100%" />
+                <a-form-item label="记录日期" required>
+                  <div class="locked-date-field" aria-label="记录日期由系统锁定为今天">
+                    <CalendarOutlined />
+                    <strong>{{ diaryDate.format('YYYY 年 MM 月 DD 日') }}</strong>
+                    <a-tag>仅限当天</a-tag>
+                  </div>
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="12">
                 <a-form-item label="发生时间">
-                  <a-time-picker v-model:value="diaryTime" format="HH:mm" style="width:100%" />
+                  <a-time-picker
+                    v-model:value="diaryTime"
+                    :allow-clear="false"
+                    :disabled-time="disabledOccurredTime"
+                    format="HH:mm"
+                    style="width:100%"
+                  />
                 </a-form-item>
               </a-col>
             </a-row>
+            <p class="timing-note"><ClockCircleOutlined />日期由系统按北京时间确定；发生时间可以选择今天早些时候，但不能选择未来时刻。</p>
             <a-form-item label="发生情境" name="contextText" :rules="requiredRule('请描述发生情境')">
               <a-textarea v-model:value="form.contextText" :rows="2" placeholder="什么情境触发了这次信息需求？" />
             </a-form-item>
@@ -104,7 +115,7 @@
 import { onActivated, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { message, Modal } from 'ant-design-vue'
-import { ArrowLeftOutlined, LinkOutlined, SaveOutlined, SendOutlined } from '@ant-design/icons-vue'
+import { ArrowLeftOutlined, CalendarOutlined, ClockCircleOutlined, LinkOutlined, SaveOutlined, SendOutlined } from '@ant-design/icons-vue'
 import dayjs from 'dayjs'
 import ConversationSidebar from '../../components/common/ConversationSidebar.vue'
 import { createDiary, getDiary, getDiaryDraftFromCase, getDiaryDraftFromMessage, updateDiary } from '../../api/diary'
@@ -118,8 +129,25 @@ const savingDraft = ref(false)
 const submitting = ref(false)
 const loaded = ref(false)
 const dirty = ref(false)
-const diaryDate = ref(dayjs())
-const diaryTime = ref(dayjs())
+const courseTimeFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+})
+
+function currentCourseDateTime() {
+  const parts = Object.fromEntries(
+    courseTimeFormatter.formatToParts(new Date())
+      .filter(part => part.type !== 'literal')
+      .map(part => [part.type, part.value])
+  )
+  const date = `${parts.year}-${parts.month}-${parts.day}`
+  const time = `${parts.hour}:${parts.minute}`
+  return { date, time, hour: Number(parts.hour), minute: Number(parts.minute), second: Number(parts.second), value: dayjs(`${date}T${time}:00`) }
+}
+
+const initialCourseTime = currentCourseDateTime()
+const diaryDate = ref(initialCourseTime.value)
+const diaryTime = ref(initialCourseTime.value)
 const sourcePreview = ref(null)
 const platformLocked = ref(false)
 const editingId = ref('')
@@ -154,8 +182,9 @@ function resetEditorState() {
   dirty.value = false
   editingId.value = ''
   originalStatus.value = null
-  diaryDate.value = dayjs()
-  diaryTime.value = dayjs()
+  const now = currentCourseDateTime()
+  diaryDate.value = now.value
+  diaryTime.value = now.value
   sourcePreview.value = null
   sourceSubmissionId.value = null
   platformLocked.value = false
@@ -200,6 +229,34 @@ function hasDraftContent() {
   return [form.contextText, form.needDescription, form.searchProcess, form.outcome, form.reflection].some(value => value.trim())
 }
 
+function numberRange(start, end) {
+  return Array.from({ length: Math.max(0, end - start) }, (_, index) => start + index)
+}
+
+function disabledOccurredTime() {
+  const now = currentCourseDateTime()
+  return {
+    disabledHours: () => numberRange(now.hour + 1, 24),
+    disabledMinutes: hour => hour === now.hour ? numberRange(now.minute + 1, 60) : [],
+    disabledSeconds: (hour, minute) => hour === now.hour && minute === now.minute
+      ? numberRange(now.second + 1, 60)
+      : [],
+  }
+}
+
+function validateTiming() {
+  const now = currentCourseDateTime()
+  if (diaryDate.value.format('YYYY-MM-DD') !== now.date) {
+    message.warning('每日信息需求记录仅支持当天填写，请刷新页面后重试')
+    return false
+  }
+  if (diaryTime.value?.format('HH:mm') > now.time) {
+    message.warning('发生时间不能晚于当前时间')
+    return false
+  }
+  return true
+}
+
 function serializedForm(status) {
   return {
     ...form,
@@ -211,6 +268,7 @@ function serializedForm(status) {
 }
 
 async function saveRecord(status) {
+  if (!validateTiming()) return
   if (status === 'draft' && !hasDraftContent()) return message.warning('请至少填写一项内容后再保存草稿')
   if (status === 'submitted') {
     try { await formRef.value.validate() } catch { return message.warning('请完整填写信息需求及获取过程') }
@@ -276,6 +334,11 @@ async function saveRecord(status) {
 .section-title:not(:first-child) { margin-top: 30px; }
 .section-title span { font-weight: 700; }
 .section-title small { color: var(--hib-muted); }
+.locked-date-field { display: flex; align-items: center; gap: 9px; min-height: 32px; padding: 4px 11px; border: 1px solid var(--hib-line); border-radius: 6px; background: var(--hib-paper); color: var(--hib-text); }
+.locked-date-field > :first-child { color: var(--hib-red); }
+.locked-date-field strong { flex: 1; font-weight: 600; }
+.timing-note { display: flex; align-items: center; gap: 7px; margin: -10px 0 20px; color: var(--hib-muted); font-size: 12px; }
+.timing-note > :first-child { color: var(--hib-red); }
 .genai-row { display: flex; align-items: center; gap: 18px; min-height: 52px; margin: 6px 0 20px; padding: 0 16px; border-left: 3px solid var(--hib-red); background: var(--hib-red-soft); }
 .form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
 @media (max-width: 980px) { .editor-grid { grid-template-columns: 1fr; } .source-panel { position: static; } .answer-block { max-height: 240px; } }

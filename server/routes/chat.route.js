@@ -87,6 +87,7 @@ router.post('/send', authMiddleware, async (req, res) => {
     const convId = conversationId || genId()
     const userMessageId = genId()
     const assistantMessageId = genId()
+    const conversationTitle = conversationId ? '' : await generateTitle(prompt, result.content)
     const userContent = imageUrl ? `[image:${imageUrl}]\n${prompt || ''}` : prompt
     const userCreatedAt = new Date()
     const assistantCreatedAt = new Date(userCreatedAt.getTime() + 1)
@@ -95,7 +96,7 @@ router.post('/send', authMiddleware, async (req, res) => {
       if (!conversationId) {
         await connection.execute(
           'INSERT INTO conversations (id, user_id, title) VALUES (?, ?, ?)',
-          [convId, req.user.id, String(prompt || '图片对话').slice(0, 30)]
+          [convId, req.user.id, conversationTitle]
         )
       }
       await connection.execute(
@@ -111,15 +112,6 @@ router.post('/send', authMiddleware, async (req, res) => {
       await connection.execute('UPDATE conversations SET updated_at = CURRENT_TIMESTAMP(3) WHERE id = ?', [convId])
     })
 
-    if (!conversationId) {
-      generateTitle(prompt).then(title => {
-        if (title) query(
-          'UPDATE conversations SET title = ? WHERE id = ? AND title_manually_edited = 0',
-          [title, convId]
-        ).catch(() => {})
-      }).catch(() => {})
-    }
-
     res.json({
       code: 0,
       data: {
@@ -130,6 +122,7 @@ router.post('/send', authMiddleware, async (req, res) => {
         model: result.model,
         modality: result.modality,
         thinkingEnabled: result.thinkingEnabled,
+        conversationTitle: conversationTitle || undefined,
       },
     })
   } catch (error) {

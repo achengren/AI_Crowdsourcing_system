@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import {
   AI_TEXT_MAX_RETRIES,
   AI_TEXT_TIMEOUT_MS,
+  AI_TITLE_TIMEOUT_MS,
   AI_VISION_MAX_RETRIES,
   AI_VISION_TIMEOUT_MS,
   DEEPSEEK_MODEL,
@@ -12,6 +13,7 @@ import {
 import { parseImageContent, readImageAsBase64 } from '../utils/image.js'
 import { deepseek, hasDeepSeekApiKey, ollama } from '../ai.js'
 import { one, query } from '../db.js'
+import { fallbackConversationTitle, sanitizeConversationTitle } from './conversationTitle.js'
 
 export class AiStageError extends Error {
   constructor(stage, message, cause) {
@@ -38,7 +40,7 @@ async function requestWithPolicy(stage, timeoutMs, maxRetries, request) {
       clearTimeout(timer)
     }
   }
-  const label = stage === 'vision' ? '图片识别' : '回答生成'
+  const label = stage === 'vision' ? '图片识别' : stage === 'title' ? '标题生成' : '回答生成'
   throw new AiStageError(stage, `${label}失败`, lastError)
 }
 
@@ -57,6 +59,25 @@ async function requestTextCompletion(messages, options = {}) {
           messages,
           temperature: options.temperature ?? 0.7,
           max_tokens: options.maxTokens ?? 2000,
+        }, { signal })
+  ))
+}
+
+async function requestTitleCompletion(messages) {
+  return requestWithPolicy('title', AI_TITLE_TIMEOUT_MS, 0, signal => (
+    hasDeepSeekApiKey
+      ? deepseek.chat.completions.create({
+          model: DEEPSEEK_MODEL,
+          messages,
+          thinking: { type: 'disabled' },
+          temperature: 0.2,
+          max_tokens: 40,
+        }, { signal })
+      : ollama.chat.completions.create({
+          model: TITLE_MODEL,
+          messages,
+          temperature: 0.2,
+          max_tokens: 40,
         }, { signal })
   ))
 }
@@ -167,18 +188,25 @@ export async function summarizeConversation(existingSummary, messages) {
   return (completion.choices[0]?.message?.content || '').trim().slice(0, 12000)
 }
 
-export async function generateTitle(prompt) {
-  const text = (prompt || '').trim() || '用户上传了一张图片请AI分析'
-  const titleRes = await ollama.chat.completions.create({
-    model: TITLE_MODEL,
-    messages: [
-      { role: 'system', content: '你是一个标题生成器。根据用户的对话内容生成一个极简短标题（6-10个字），只输出标题本身，不要引号、换行或任何解释。' },
-      { role: 'user', content: text.slice(0, 300) },
-    ],
-    max_tokens: 20,
-    temperature: 0.3,
-  })
-  return (titleRes.choices[0]?.message?.content || '').replace(/["'\n]/g, '').trim().slice(0, 20)
+export async function generateTitle(prompt, reply = '') {
+  const fallback = fallbackConversationTitle(prompt)
+  try {
+    const completion = await requestTitleCompletion([
+      {
+        role: 'system',
+        content: `从对话中提炼一个具体的中文主题短语，供会话列表快速识别。
+要求：6-16 个汉字；优先保留对象、任务或问题；不要写“标题”“对话”“用户问题”；不要复述指令；只输出主题短语，不要标点、引号或解释。`,
+      },
+      {
+        role: 'user',
+        content: `<user_request>${String(prompt || '用户上传图片并请求分析').slice(0, 500)}</user_request>\n<assistant_reply>${String(reply || '').slice(0, 800)}</assistant_reply>`,
+      },
+    ])
+    return sanitizeConversationTitle(completion.choices[0]?.message?.content, prompt)
+  } catch (error) {
+    console.warn('会话标题生成失败，使用本地摘要:', error.message)
+    return fallback
+  }
 }
 
 export async function evaluateResponseQuality(reply, prompt) {

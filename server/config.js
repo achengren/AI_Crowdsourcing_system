@@ -53,6 +53,7 @@ export const TITLE_MODEL = process.env.TITLE_MODEL?.trim() || ''
 export const AI_CONTEXT_TOKEN_BUDGET = Math.max(4000, Number(process.env.AI_CONTEXT_TOKEN_BUDGET || 16000))
 export const AI_TEXT_TIMEOUT_MS = Math.max(5000, Number(process.env.AI_TEXT_TIMEOUT_MS || 45000))
 export const AI_VISION_TIMEOUT_MS = Math.max(5000, Number(process.env.AI_VISION_TIMEOUT_MS || 60000))
+export const AI_TITLE_TIMEOUT_MS = Math.max(1000, Number(process.env.AI_TITLE_TIMEOUT_MS || 3500))
 export const AI_TEXT_MAX_RETRIES = Math.max(0, Number(process.env.AI_TEXT_MAX_RETRIES || 1))
 export const AI_VISION_MAX_RETRIES = Math.max(0, Number(process.env.AI_VISION_MAX_RETRIES || 1))
 

@@ -4,13 +4,14 @@ import { genId, one, query } from '../db.js'
 import { authMiddleware } from '../middleware.js'
 import { toBoolean } from '../utils/data.js'
 import { extractUserMessage } from '../services/submissionIntegrity.js'
+import { getCourseDateTime, isCurrentCourseDate, validateDiaryTiming } from '../services/diaryPolicy.js'
 
 const router = Router()
 router.use(authMiddleware)
 
 const diarySchema = z.object({
   logDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  occurredAt: z.string().nullable().optional(),
+  occurredAt: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
   contextText: z.string().trim().max(20000).optional().default(''),
   needDescription: z.string().trim().max(20000).optional().default(''),
   channels: z.string().trim().max(20000).optional().default(''),
@@ -87,35 +88,45 @@ async function resolveSources(userId, data, existing = {}) {
   const sourceSubmissionId = data.sourceSubmissionId === undefined ? existing.sourceSubmissionId || null : data.sourceSubmissionId
   let linkedConversationId = data.linkedConversationId === undefined ? existing.linkedConversationId || null : data.linkedConversationId
   let genaiPlatform = ''
+  const sourceLogDates = []
 
   if (sourceSubmissionId) {
     const submission = await one(
-      'SELECT source_message_id AS sourceMessageId, platform FROM submissions WHERE id = ? AND user_id = ?',
+      `SELECT source_message_id AS sourceMessageId, platform,
+              DATE_FORMAT(created_at, '%Y-%m-%d') AS sourceLogDate
+       FROM submissions WHERE id = ? AND user_id = ?`,
       [sourceSubmissionId, userId]
     )
     if (!submission) return null
     genaiPlatform = submission.platform || ''
+    if (submission.sourceLogDate) sourceLogDates.push(submission.sourceLogDate)
     if (!sourceMessageId && submission.sourceMessageId) sourceMessageId = submission.sourceMessageId
   }
   if (sourceMessageId) {
     const message = await one(
-      `SELECT c.id AS conversationId, m.provider AS platform FROM messages m JOIN conversations c ON c.id = m.conversation_id
+      `SELECT c.id AS conversationId, m.provider AS platform,
+              DATE_FORMAT(m.created_at, '%Y-%m-%d') AS sourceLogDate
+       FROM messages m JOIN conversations c ON c.id = m.conversation_id
        WHERE m.id = ? AND m.role = 'assistant' AND c.user_id = ?`,
       [sourceMessageId, userId]
     )
     if (!message) return null
     linkedConversationId = message.conversationId
     genaiPlatform = message.platform || genaiPlatform
+    if (message.sourceLogDate) sourceLogDates.push(message.sourceLogDate)
   } else if (linkedConversationId) {
     const conversation = await one('SELECT id FROM conversations WHERE id = ? AND user_id = ?', [linkedConversationId, userId])
     if (!conversation) return null
   }
-  return { sourceMessageId, sourceSubmissionId, linkedConversationId, genaiPlatform }
+  return { sourceMessageId, sourceSubmissionId, linkedConversationId, genaiPlatform, sourceLogDates }
 }
 
 router.get('/draft/from-message/:messageId', async (req, res) => {
   const draft = await messageDraft(req.user.id, req.params.messageId)
   if (!draft) return res.status(404).json({ message: '找不到该 AI 回复' })
+  if (!isCurrentCourseDate(draft.logDate)) {
+    return res.status(400).json({ message: '仅支持将当天的 AI 对话记录为信息需求作业' })
+  }
   res.json({ code: 0, data: draft })
 })
 
@@ -130,6 +141,9 @@ router.get('/draft/from-case/:caseId', async (req, res) => {
   )
   if (!item) return res.status(404).json({ message: '案例不存在或不属于当前用户' })
   const fromMessage = item.sourceMessageId ? await messageDraft(req.user.id, item.sourceMessageId) : null
+  if (!isCurrentCourseDate(fromMessage?.logDate || item.logDate)) {
+    return res.status(400).json({ message: '仅支持将当天发生的信息行为记录为作业' })
+  }
   const data = fromMessage || {
     logDate: item.logDate,
     occurredAt: item.occurredAt,
@@ -230,8 +244,15 @@ router.post('/', async (req, res) => {
   const parsed = diarySchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ message: '信息需求记录格式错误' })
   const data = parsed.data
+  const now = new Date()
+  const timingError = validateDiaryTiming(data, now)
+  if (timingError) return res.status(400).json({ message: timingError })
+  data.logDate = getCourseDateTime(now).date
   const sources = await resolveSources(req.user.id, data)
   if (!sources) return res.status(400).json({ message: '来源对话或案例无效' })
+  if (sources.sourceLogDates.some(logDate => !isCurrentCourseDate(logDate, now))) {
+    return res.status(400).json({ message: '仅支持将当天发生的信息行为记录为作业' })
+  }
   if (sources.sourceMessageId || sources.sourceSubmissionId) {
     data.isGenaiRelated = true
     if (sources.genaiPlatform) data.genaiPlatform = sources.genaiPlatform
@@ -268,8 +289,14 @@ router.put('/:id', async (req, res) => {
   if (!toBoolean(existing.editable)) return res.status(403).json({ message: '历史信息需求记录仅供查看，只能修改当天记录' })
   const data = parsed.data
   data.logDate = existing.logDate
+  const now = new Date()
+  const timingError = validateDiaryTiming(data, now)
+  if (timingError) return res.status(400).json({ message: timingError })
   const sources = await resolveSources(req.user.id, data, existing)
   if (!sources) return res.status(400).json({ message: '来源对话或案例无效' })
+  if (sources.sourceLogDates.some(logDate => !isCurrentCourseDate(logDate, now))) {
+    return res.status(400).json({ message: '仅支持将当天发生的信息行为记录为作业' })
+  }
   if (sources.sourceMessageId || sources.sourceSubmissionId) {
     data.isGenaiRelated = true
     if (sources.genaiPlatform) data.genaiPlatform = sources.genaiPlatform
